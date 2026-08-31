@@ -12,5 +12,13 @@ public interface SubjectRepository extends JpaRepository<Subject, Long> {
 
     List<Subject> findByCourseIdAndActiveTrue(Long courseId);
 
+    List<Subject> findByCourseId(Long courseId);
+
+    List<Subject> findByActive(Boolean active);
+
+    List<Subject> findByCourseIdAndActive(Long courseId, Boolean active);
+
     Optional<Subject> findByCourseIdAndCode(Long courseId, String code);
+
+    boolean existsByCourseIdAndCode(Long courseId, String code);
 }

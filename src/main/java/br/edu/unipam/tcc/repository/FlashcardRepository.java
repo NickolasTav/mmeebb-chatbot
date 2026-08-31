@@ -12,4 +12,10 @@ public interface FlashcardRepository extends JpaRepository<Flashcard, Long> {
     List<Flashcard> findBySubjectIdAndActiveTrue(Long subjectId);
 
     List<Flashcard> findBySubjectIdAndTopicAndActiveTrue(Long subjectId, String topic);
+
+    List<Flashcard> findBySubjectId(Long subjectId);
+
+    List<Flashcard> findBySubjectIdAndActive(Long subjectId, Boolean active);
+
+    List<Flashcard> findByActive(Boolean active);
 }

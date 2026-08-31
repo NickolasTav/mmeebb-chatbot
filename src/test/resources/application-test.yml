@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: med-mmeebb-chatbot-test
+
+  flyway:
+    enabled: false
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+  rabbitmq:
+    listener:
+      simple:
+        auto-startup: false
+
+logging:
+  level:
+    root: WARN
+    br.edu.unipam.tcc: INFO

@@ -33,34 +33,7 @@ class WhatsappMessageConsumerTest {
     }
 
     @Test
-    @DisplayName("Smoke Test: Deve executar ciclo completo de saída (presença composing -> delay -> envio -> presença paused)")
-    void deveProcessarMensagemDeSaidaComPresencaEDelay() {
-        OutgoingMessageDto outgoingDto = new OutgoingMessageDto(
-                "5534999998888",
-                "Olá! Esta é a sua questão do MMEEBB hoje.",
-                0L
-        );
-
-        consumer.consumeOutgoingMessage(outgoingDto);
-
-        InOrder inOrder = inOrder(uazapiClientService);
-        inOrder.verify(uazapiClientService).sendPresence("5534999998888", "composing");
-        inOrder.verify(uazapiClientService).sendTextMessage("5534999998888", "Olá! Esta é a sua questão do MMEEBB hoje.");
-        inOrder.verify(uazapiClientService).sendPresence("5534999998888", "paused");
-    }
-
-    @Test
-    @DisplayName("Deve ignorar mensagem de saída nula ou com telefone nulo/em branco")
-    void deveIgnorarMensagemDeSaidaInvalida() {
-        assertDoesNotThrow(() -> consumer.consumeOutgoingMessage(null));
-        assertDoesNotThrow(() -> consumer.consumeOutgoingMessage(new OutgoingMessageDto(null, "Texto", 0L)));
-        assertDoesNotThrow(() -> consumer.consumeOutgoingMessage(new OutgoingMessageDto("   ", "Texto", 0L)));
-
-        verifyNoInteractions(uazapiClientService);
-    }
-
-    @Test
-    @DisplayName("Deve simular presença composing, delegar para o orquestrador e enviar presença paused na entrada")
+    @DisplayName("Smoke Test: Deve consumir mensagem de entrada, simular presença e delegar ao orquestrador")
     void deveConsumirMensagemDeEntradaSimularPresencaEDelegarAoOrquestrador() {
         UazapiWebhookDto webhookDto = new UazapiWebhookDto(
                 "5534999998888@s.whatsapp.net",

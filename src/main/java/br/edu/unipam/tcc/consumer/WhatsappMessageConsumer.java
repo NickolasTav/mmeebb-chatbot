@@ -11,9 +11,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Asynchronous RabbitMQ consumer for WhatsApp events.
- * Manages outgoing queue with anti-ban rate limiting and incoming queue
- * with typing presence simulation before delegating to the conversation orchestrator.
+ * Asynchronous RabbitMQ consumer for incoming WhatsApp events.
+ * Listens to incoming webhook queue, simulates typing presence with human delay,
+ * and delegates execution to the conversational flow orchestrator.
  */
 @Slf4j
 @Component
@@ -31,49 +31,6 @@ public class WhatsappMessageConsumer {
         this.uazapiClientService = uazapiClientService;
         this.chatFlowOrchestrator = chatFlowOrchestrator;
         this.defaultTypingDelayMs = defaultTypingDelayMs;
-    }
-
-    /**
-     * Consumes messages from the outgoing queue (whatsapp.outgoing.queue).
-     * Single concurrency to avoid bursts.
-     *
-     * @param outgoingDto Outgoing message payload.
-     */
-    @RabbitListener(queues = RabbitMQConfig.OUTGOING_QUEUE, concurrency = "1")
-    public void consumeOutgoingMessage(OutgoingMessageDto outgoingDto) {
-        if (outgoingDto == null || outgoingDto.phoneNumber() == null || outgoingDto.phoneNumber().isBlank()) {
-            log.warn("[WhatsappConsumer] Mensagem de saída ignorada: payload ou telefone nulo/vazio.");
-            return;
-        }
-
-        String phone = outgoingDto.phoneNumber().trim();
-        String text = outgoingDto.messageText();
-        long delayMs = outgoingDto.typingDelayMs() != null ? outgoingDto.typingDelayMs() : defaultTypingDelayMs;
-
-        log.info("[WhatsappConsumer] Processando saída para [{}] (Delay: {}ms)", phone, delayMs);
-
-        try {
-            // 1. Simula presença 'composing' (digitando...)
-            uazapiClientService.sendPresence(phone, "composing");
-
-            // 2. Aplica atraso controlado (anti-ban)
-            if (delayMs > 0) {
-                Thread.sleep(delayMs);
-            }
-
-            // 3. Dispara a mensagem de texto
-            uazapiClientService.sendTextMessage(phone, text);
-
-            // 4. Atualiza estado de presença para 'paused'
-            uazapiClientService.sendPresence(phone, "paused");
-
-            log.info("[WhatsappConsumer] Despacho concluído com sucesso para [{}]", phone);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("[WhatsappConsumer] Thread interrompida durante typing delay para [{}]: {}", phone, e.getMessage());
-        } catch (Exception e) {
-            log.error("[WhatsappConsumer] Falha no processamento de envio para [{}]: {}", phone, e.getMessage(), e);
-        }
     }
 
     /**

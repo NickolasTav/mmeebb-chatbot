@@ -15,9 +15,9 @@ import org.springframework.context.annotation.Configuration;
 import javax.sql.DataSource;
 
 /**
- * Spring Configuration for LangChain4j integration with Google Gemini and pgvector.
- * Sets up ChatLanguageModel, EmbeddingModel (text-embedding-004 with 768 dimensions),
- * and PgVectorEmbeddingStore pointing to tb_knowledge_embedding.
+ * Configuração Spring para integração do LangChain4j com Google Gemini e pgvector.
+ * Configura os beans ChatLanguageModel, EmbeddingModel (text-embedding-004 com 768 dimensões)
+ * e PgVectorEmbeddingStore apontando para a tabela tb_knowledge_embedding.
  */
 @Slf4j
 @Configuration

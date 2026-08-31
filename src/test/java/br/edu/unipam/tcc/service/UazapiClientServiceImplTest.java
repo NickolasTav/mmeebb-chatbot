@@ -37,9 +37,9 @@ class UazapiClientServiceImplTest {
     }
 
     @Test
-    @DisplayName("Smoke Test: Deve disparar POST /message/sendText com payload e headers corretos")
+    @DisplayName("Smoke Test: Deve disparar POST /send/text com payload e headers corretos")
     void deveEnviarMensagemDeTextoComSucesso() {
-        mockServer.expect(requestTo("https://free.uazapi.com/message/sendText"))
+        mockServer.expect(requestTo("https://free.uazapi.com/send/text"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("apikey", API_KEY))
                 .andExpect(header("token", API_KEY))
@@ -56,9 +56,9 @@ class UazapiClientServiceImplTest {
     }
 
     @Test
-    @DisplayName("Deve disparar POST /chat/sendPresence com status 'composing' e headers corretos")
+    @DisplayName("Deve disparar POST /send/presence com status 'composing' e headers corretos")
     void deveEnviarPresencaComposingComSucesso() {
-        mockServer.expect(requestTo("https://free.uazapi.com/chat/sendPresence"))
+        mockServer.expect(requestTo("https://free.uazapi.com/send/presence"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(header("apikey", API_KEY))
                 .andExpect(header("token", API_KEY))
@@ -75,8 +75,16 @@ class UazapiClientServiceImplTest {
     }
 
     @Test
-    @DisplayName("Deve tratar erro 500 do servidor da Uazapi de forma resiliente sem propagar exception não tratada")
+    @DisplayName("Deve tratar erro do servidor da Uazapi de forma resiliente sem propagar exception não tratada")
     void deveTratarErroHttpResiliente() {
+        mockServer.expect(requestTo("https://free.uazapi.com/send/text"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withServerError());
+
+        mockServer.expect(requestTo("https://free.uazapi.com/message/sendText/med-instance"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withServerError());
+
         mockServer.expect(requestTo("https://free.uazapi.com/message/sendText"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withServerError());

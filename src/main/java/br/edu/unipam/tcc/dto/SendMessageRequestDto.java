@@ -12,6 +12,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record SendMessageRequestDto(
         @JsonProperty("number") String number,
-        @JsonProperty("text") String text
+        @JsonProperty("phone") String phone,
+        @JsonProperty("text") String text,
+        @JsonProperty("body") String body
 ) {
+    public SendMessageRequestDto(String number, String text) {
+        this(number, number, text, text);
+    }
 }

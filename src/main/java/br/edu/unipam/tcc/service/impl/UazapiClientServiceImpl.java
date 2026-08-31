@@ -42,38 +42,57 @@ public class UazapiClientServiceImpl implements UazapiClientService {
             return;
         }
 
-        try {
-            SendMessageRequestDto payload = new SendMessageRequestDto(phoneNumber.trim(), message.trim());
-            log.info("[UazapiClient] Disparando POST /message/sendText para [{}]", phoneNumber);
+        SendMessageRequestDto payload = new SendMessageRequestDto(phoneNumber.trim(), message.trim());
+        log.info("[UazapiClient] Disparando envio de texto para [{}] via Uazapi...", phoneNumber);
 
+        // 1. Rota primária nativa: POST /send/text (Padrão Uazapi / UazapiGO)
+        boolean sent = executePost("/send/text", payload, phoneNumber);
+        
+        // 2. Fallback com instância: POST /message/sendText/{instance}
+        if (!sent && instance != null && !instance.isBlank()) {
+            log.info("[UazapiClient] Tentando fallback para /message/sendText/{}...", instance);
+            sent = executePost("/message/sendText/" + instance, payload, phoneNumber);
+        }
+        
+        // 3. Fallback legado: POST /message/sendText
+        if (!sent) {
+            log.info("[UazapiClient] Tentando fallback para /message/sendText...");
+            executePost("/message/sendText", payload, phoneNumber);
+        }
+    }
+
+    private boolean executePost(String uri, Object payload, String targetPhone) {
+        try {
             restClient.post()
-                    .uri("/message/sendText")
+                    .uri(uri)
                     .header("apikey", this.apiKey)
                     .header("token", this.apiKey)
+                    .header("Authorization", "Bearer " + this.apiKey)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(payload)
                     .retrieve()
                     .toBodilessEntity();
-
-            log.info("[UazapiClient] Mensagem de texto enviada com sucesso para [{}]", phoneNumber);
+            log.info("[UazapiClient] Mensagem de texto enviada com sucesso via [{}] para [{}]", uri, targetPhone);
+            return true;
         } catch (Exception e) {
-            log.error("[UazapiClient] Falha ao enviar mensagem de texto para [{}]: {}", phoneNumber, e.getMessage(), e);
+            log.warn("[UazapiClient] Falha ao enviar via rota [{}] para [{}]: {}", uri, targetPhone, e.getMessage());
+            return false;
         }
     }
 
     @Override
     public void sendPresence(String phoneNumber, String presence) {
         if (phoneNumber == null || phoneNumber.isBlank() || presence == null || presence.isBlank()) {
-            log.warn("[UazapiClient] Envio de presença cancelado: número ou presença vazios/nulos.");
+            log.debug("[UazapiClient] Envio de presença cancelado: número ou presença vazios/nulos.");
             return;
         }
 
         try {
             SendPresenceRequestDto payload = new SendPresenceRequestDto(phoneNumber.trim(), presence.trim());
-            log.debug("[UazapiClient] Disparando POST /chat/sendPresence ({}) para [{}]", presence, phoneNumber);
+            log.debug("[UazapiClient] Disparando POST /send/presence ({}) para [{}]", presence, phoneNumber);
 
             restClient.post()
-                    .uri("/chat/sendPresence")
+                    .uri("/send/presence")
                     .header("apikey", this.apiKey)
                     .header("token", this.apiKey)
                     .contentType(MediaType.APPLICATION_JSON)
@@ -83,7 +102,7 @@ public class UazapiClientServiceImpl implements UazapiClientService {
 
             log.debug("[UazapiClient] Estado de presença ({}) enviado para [{}]", presence, phoneNumber);
         } catch (Exception e) {
-            log.warn("[UazapiClient] Não foi possível atualizar presença ({}) para [{}]: {}", presence, phoneNumber, e.getMessage());
+            log.debug("[UazapiClient] Gateway não processou envio de presença ({}) para [{}]: {}", presence, phoneNumber, e.getMessage());
         }
     }
 }

@@ -28,9 +28,15 @@ import java.util.Set;
 @Service
 public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
+    private static final Set<String> EXIT_COMMANDS = Set.of(
+            "sair", "/sair", "!sair", "tchau", "tchauu", "tchauzinho",
+            "encerrar", "finalizar", "fim", "ate mais", "até mais",
+            "flw", "valeu", "adeus", "fechar", "parar"
+    );
+
     private static final Set<String> RESET_COMMANDS = Set.of(
-            "menu", "sair", "inicio", "início", "começo", "comeco", "reset", "reiniciar",
-            "/menu", "/sair", "/inicio", "/start", "/reset"
+            "menu", "inicio", "início", "começo", "comeco", "reset", "reiniciar",
+            "/menu", "/inicio", "/start", "/reset"
     );
 
     private static final Set<String> GREETING_OR_HELP_COMMANDS = Set.of(
@@ -100,7 +106,12 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         ChatSession session = resolveSession(phoneNumber);
         session.setLastInteractionAt(LocalDateTime.now());
 
-        // 2. Interceptação de Comandos Globais de Reset
+        // 2. Interceptação de Comandos Globais de Saída e Reset
+        if (isExitCommand(lowerText)) {
+            handleExitCommand(session, phoneNumber);
+            return;
+        }
+
         if (isGlobalResetCommand(lowerText)) {
             handleGlobalReset(session, phoneNumber);
             return;
@@ -140,6 +151,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 });
     }
 
+    private boolean isExitCommand(String text) {
+        if (text == null || text.isBlank()) return false;
+        return EXIT_COMMANDS.contains(text.toLowerCase().trim());
+    }
+
     private boolean isGlobalResetCommand(String text) {
         if (text == null || text.isBlank()) return false;
         return RESET_COMMANDS.contains(text.toLowerCase().trim());
@@ -154,6 +170,20 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         return clean.startsWith("olá") || clean.startsWith("ola") || clean.startsWith("oi ")
                 || clean.startsWith("bom dia") || clean.startsWith("boa tarde") || clean.startsWith("boa noite")
                 || clean.startsWith("ajuda") || clean.startsWith("help");
+    }
+
+    private void handleExitCommand(ChatSession session, String phoneNumber) {
+        log.info("[Orchestrator] Comando de saída (Exit Intent) recebido de [{}]", phoneNumber);
+        session.setCurrentState(ChatState.MAIN_MENU);
+        session.setCurrentFlashcard(null);
+        chatSessionRepository.save(session);
+
+        String exitMsg = """
+                👋 *Até logo!* Sua sessão de estudos foi finalizada com sucesso.
+
+                Sempre que quiser voltar a estudar, revisar seus flashcards ou tirar dúvidas com o tutor, basta enviar uma mensagem! 🚀📚""";
+
+        uazapiClientService.sendTextMessage(phoneNumber, exitMsg);
     }
 
     private void handleGlobalReset(ChatSession session, String phoneNumber) {
@@ -448,7 +478,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                         "*1* - 📚 Modo Revisão MMEEBB\n" +
                         "*2* - 💡 Modo Dúvidas (RAG)\n" +
                         "*3* - 🔄 Trocar Disciplina/Curso\n\n" +
-                        "_Digite o número da opção desejada ou *sair* para reiniciar._";
+                        "_Digite o número da opção desejada ou *sair* para finalizar._";
                 uazapiClientService.sendTextMessage(phoneNumber, successMsg);
                 return;
             }
@@ -487,7 +517,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 *2* - 💡 Modo Dúvidas (RAG)
                 *3* - 🔄 Trocar Disciplina/Curso
                 
-                _Digite o número da opção desejada ou *sair* para reiniciar._""";
+                _Digite o número da opção desejada ou *sair* para finalizar._""";
         uazapiClientService.sendTextMessage(phoneNumber, menuMsg);
     }
 }

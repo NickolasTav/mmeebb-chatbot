@@ -145,7 +145,7 @@ class ChatFlowOrchestratorImplTest {
     }
 
     @Test
-    @DisplayName("Deve resetar para MAIN_MENU quando receber comando global como 'menu' ou 'sair'")
+    @DisplayName("Deve resetar para MAIN_MENU quando receber comando global como 'menu' ou 'inicio'")
     void shouldResetToMainMenuWhenGlobalResetCommandReceived() {
         mockSession.setCurrentState(ChatState.REVIEW_MODE);
         mockSession.setCurrentFlashcard(mockFlashcard);
@@ -164,6 +164,77 @@ class ChatFlowOrchestratorImplTest {
         ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
         verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
         assertTrue(messageCaptor.getValue().contains("Menu Principal"));
+    }
+
+    @Test
+    @DisplayName("Deve finalizar sessão e enviar mensagem de despedida sem menu quando usuário enviar 'sair'")
+    void shouldHandleExitCommandAndSendFarewellWithoutMenuWhenInMainMenu() {
+        mockSession.setCurrentState(ChatState.MAIN_MENU);
+        mockSession.setCurrentFlashcard(null);
+
+        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "Sair", "instancia", "msg-exit-1");
+
+        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
+        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        orchestrator.processIncomingMessage(webhookDto);
+
+        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
+        assertNull(mockSession.getCurrentFlashcard());
+        verify(chatSessionRepository).save(mockSession);
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
+        String sentMessage = messageCaptor.getValue();
+        assertTrue(sentMessage.contains("Até logo"), "Deveria conter 'Até logo' mas foi: " + sentMessage);
+        assertTrue(sentMessage.contains("finalizada") || sentMessage.contains("encerrada"), "Deveria conter status de finalização mas foi: " + sentMessage);
+        assertFalse(sentMessage.contains("Menu Principal"), "NÃO deveria reenviar o Menu Principal");
+    }
+
+    @Test
+    @DisplayName("Deve encerrar revisão ativa e enviar despedida quando usuário enviar 'tchau' no REVIEW_MODE")
+    void shouldHandleExitCommandAndResetSessionWhenInReviewMode() {
+        mockSession.setCurrentState(ChatState.REVIEW_MODE);
+        mockSession.setCurrentFlashcard(mockFlashcard);
+
+        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "tchau", "instancia", "msg-exit-2");
+
+        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
+        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        orchestrator.processIncomingMessage(webhookDto);
+
+        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
+        assertNull(mockSession.getCurrentFlashcard());
+        verify(chatSessionRepository).save(mockSession);
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
+        String sentMessage = messageCaptor.getValue();
+        assertTrue(sentMessage.contains("Até logo"));
+        assertFalse(sentMessage.contains("Menu Principal"));
+    }
+
+    @Test
+    @DisplayName("Deve encerrar sessão com despedida quando usuário enviar '/sair' no RAG_DOUBT_MODE")
+    void shouldHandleExitCommandWhenInRagDoubtMode() {
+        mockSession.setCurrentState(ChatState.RAG_DOUBT_MODE);
+
+        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "/sair", "instancia", "msg-exit-3");
+
+        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
+        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        orchestrator.processIncomingMessage(webhookDto);
+
+        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
+        verify(chatSessionRepository).save(mockSession);
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
+        String sentMessage = messageCaptor.getValue();
+        assertTrue(sentMessage.contains("Até logo"));
+        assertFalse(sentMessage.contains("Menu Principal"));
     }
 
     @Test

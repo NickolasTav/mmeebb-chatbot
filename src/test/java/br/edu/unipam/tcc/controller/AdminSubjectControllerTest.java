@@ -154,4 +154,31 @@ class AdminSubjectControllerTest {
 
         verify(subjectService, times(1)).updateStatus(eq(10L), any(SubjectStatusDto.class));
     }
+
+    @Test
+    @DisplayName("Deve ativar matéria via PATCH /api/admin/subjects/{id}/activate")
+    void shouldActivateSubject() throws Exception {
+        when(subjectService.activate(10L)).thenReturn(subjectResponse);
+
+        mockMvc.perform(patch("/api/admin/subjects/10/activate")
+                        .header("api_key", API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+
+        verify(subjectService, times(1)).activate(10L);
+    }
+
+    @Test
+    @DisplayName("Deve desativar matéria via PATCH /api/admin/subjects/{id}/deactivate")
+    void shouldDeactivateSubject() throws Exception {
+        SubjectResponseDto inactiveResponse = new SubjectResponseDto(10L, 1L, "Medicina", "CLIN_MED", "Clínica Médica", "Desc", false, LocalDateTime.now(), LocalDateTime.now());
+        when(subjectService.deactivate(10L)).thenReturn(inactiveResponse);
+
+        mockMvc.perform(patch("/api/admin/subjects/10/deactivate")
+                        .header("api_key", API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+
+        verify(subjectService, times(1)).deactivate(10L);
+    }
 }

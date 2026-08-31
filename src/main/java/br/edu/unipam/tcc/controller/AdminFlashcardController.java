@@ -55,4 +55,14 @@ public class AdminFlashcardController {
     ) {
         return ResponseEntity.ok(flashcardService.updateStatus(id, statusDto));
     }
+
+    @PatchMapping("/{id}/activate")
+    public ResponseEntity<FlashcardResponseDto> activate(@PathVariable Long id) {
+        return ResponseEntity.ok(flashcardService.activate(id));
+    }
+
+    @PatchMapping("/{id}/deactivate")
+    public ResponseEntity<FlashcardResponseDto> deactivate(@PathVariable Long id) {
+        return ResponseEntity.ok(flashcardService.deactivate(id));
+    }
 }

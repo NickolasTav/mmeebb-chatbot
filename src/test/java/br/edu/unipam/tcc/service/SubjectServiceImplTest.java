@@ -154,4 +154,26 @@ class SubjectServiceImplTest {
 
         assertThat(result.active()).isFalse();
     }
+
+    @Test
+    @DisplayName("Deve ativar matéria com sucesso")
+    void shouldActivateSubject() {
+        when(subjectRepository.findById(10L)).thenReturn(Optional.of(subjectClinMed));
+        when(subjectRepository.save(any(Subject.class))).thenReturn(subjectClinMed);
+
+        SubjectResponseDto result = subjectService.activate(10L);
+
+        assertThat(result.active()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Deve desativar matéria com sucesso")
+    void shouldDeactivateSubject() {
+        when(subjectRepository.findById(10L)).thenReturn(Optional.of(subjectClinMed));
+        when(subjectRepository.save(any(Subject.class))).thenReturn(subjectClinMed);
+
+        SubjectResponseDto result = subjectService.deactivate(10L);
+
+        assertThat(result.active()).isFalse();
+    }
 }

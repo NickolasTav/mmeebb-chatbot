@@ -55,4 +55,14 @@ public class AdminSubjectController {
     ) {
         return ResponseEntity.ok(subjectService.updateStatus(id, statusDto));
     }
+
+    @PatchMapping("/{id}/activate")
+    public ResponseEntity<SubjectResponseDto> activate(@PathVariable Long id) {
+        return ResponseEntity.ok(subjectService.activate(id));
+    }
+
+    @PatchMapping("/{id}/deactivate")
+    public ResponseEntity<SubjectResponseDto> deactivate(@PathVariable Long id) {
+        return ResponseEntity.ok(subjectService.deactivate(id));
+    }
 }

@@ -158,4 +158,33 @@ class AdminFlashcardControllerTest {
 
         verify(flashcardService, times(1)).updateStatus(eq(100L), any(FlashcardStatusDto.class));
     }
+
+    @Test
+    @DisplayName("Deve ativar flashcard via PATCH /api/admin/flashcards/{id}/activate")
+    void shouldActivateFlashcard() throws Exception {
+        when(flashcardService.activate(100L)).thenReturn(flashcardResponse);
+
+        mockMvc.perform(patch("/api/admin/flashcards/100/activate")
+                        .header("api_key", API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+
+        verify(flashcardService, times(1)).activate(100L);
+    }
+
+    @Test
+    @DisplayName("Deve desativar flashcard via PATCH /api/admin/flashcards/{id}/deactivate")
+    void shouldDeactivateFlashcard() throws Exception {
+        FlashcardResponseDto inactive = new FlashcardResponseDto(
+                100L, 10L, "Clínica Médica", "Cardiologia", QuestionType.MULTIPLE_CHOICE, "Q", "A", null, null, DifficultyLevel.HARD, "SBC", false, LocalDateTime.now(), LocalDateTime.now()
+        );
+        when(flashcardService.deactivate(100L)).thenReturn(inactive);
+
+        mockMvc.perform(patch("/api/admin/flashcards/100/deactivate")
+                        .header("api_key", API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+
+        verify(flashcardService, times(1)).deactivate(100L);
+    }
 }

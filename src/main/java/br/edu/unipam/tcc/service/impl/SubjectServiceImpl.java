@@ -110,6 +110,18 @@ public class SubjectServiceImpl implements SubjectService {
         return toResponseDto(updated);
     }
 
+    @Override
+    @Transactional
+    public SubjectResponseDto activate(Long id) {
+        return updateStatus(id, new SubjectStatusDto(true));
+    }
+
+    @Override
+    @Transactional
+    public SubjectResponseDto deactivate(Long id) {
+        return updateStatus(id, new SubjectStatusDto(false));
+    }
+
     private Subject findSubjectOrThrow(Long id) {
         return subjectRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Disciplina com ID " + id + " não encontrada."));

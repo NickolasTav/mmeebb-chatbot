@@ -146,4 +146,26 @@ class FlashcardServiceImplTest {
 
         assertThat(result.active()).isFalse();
     }
+
+    @Test
+    @DisplayName("Deve ativar flashcard com sucesso")
+    void shouldActivateFlashcard() {
+        when(flashcardRepository.findById(100L)).thenReturn(Optional.of(flashcard));
+        when(flashcardRepository.save(any(Flashcard.class))).thenReturn(flashcard);
+
+        FlashcardResponseDto result = flashcardService.activate(100L);
+
+        assertThat(result.active()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Deve desativar flashcard com sucesso")
+    void shouldDeactivateFlashcard() {
+        when(flashcardRepository.findById(100L)).thenReturn(Optional.of(flashcard));
+        when(flashcardRepository.save(any(Flashcard.class))).thenReturn(flashcard);
+
+        FlashcardResponseDto result = flashcardService.deactivate(100L);
+
+        assertThat(result.active()).isFalse();
+    }
 }

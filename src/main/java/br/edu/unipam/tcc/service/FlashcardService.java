@@ -17,4 +17,8 @@ public interface FlashcardService {
     FlashcardResponseDto update(Long id, FlashcardRequestDto requestDto);
 
     FlashcardResponseDto updateStatus(Long id, FlashcardStatusDto statusDto);
+
+    FlashcardResponseDto activate(Long id);
+
+    FlashcardResponseDto deactivate(Long id);
 }

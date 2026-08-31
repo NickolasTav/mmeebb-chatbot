@@ -17,4 +17,8 @@ public interface SubjectService {
     SubjectResponseDto update(Long id, SubjectRequestDto requestDto);
 
     SubjectResponseDto updateStatus(Long id, SubjectStatusDto statusDto);
+
+    SubjectResponseDto activate(Long id);
+
+    SubjectResponseDto deactivate(Long id);
 }

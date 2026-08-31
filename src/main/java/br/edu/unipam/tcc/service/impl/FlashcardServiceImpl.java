@@ -114,6 +114,18 @@ public class FlashcardServiceImpl implements FlashcardService {
         return toResponseDto(updated);
     }
 
+    @Override
+    @Transactional
+    public FlashcardResponseDto activate(Long id) {
+        return updateStatus(id, new FlashcardStatusDto(true));
+    }
+
+    @Override
+    @Transactional
+    public FlashcardResponseDto deactivate(Long id) {
+        return updateStatus(id, new FlashcardStatusDto(false));
+    }
+
     private Flashcard findFlashcardOrThrow(Long id) {
         return flashcardRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Flashcard com ID " + id + " não encontrado."));

@@ -144,4 +144,71 @@ class UazapiWebhookDtoTest {
         assertEquals("MSG_ID_TESTE_999", dto.messageId());
         assertEquals("5511988887777", dto.getCleanPhoneNumber());
     }
+
+    @Test
+    @DisplayName("Deve deserializar payload quando message.content for um objeto JSON (START_OBJECT)")
+    void deveDeserializarPayloadQuandoMessageContentForObjetoJson() throws Exception {
+        String jsonComContentObjeto = """
+                {
+                    "BaseUrl": "https://free.uazapi.com",
+                    "EventType": "messages",
+                    "chat": {
+                        "phone": "5534999998888",
+                        "wa_chatid": "5534999998888@s.whatsapp.net",
+                        "wa_name": "Dr. Nickolas"
+                    },
+                    "instanceName": "med-instance",
+                    "message": {
+                        "chatid": "5534999998888@s.whatsapp.net",
+                        "content": {
+                            "text": "Olá chatbot"
+                        },
+                        "fromMe": false,
+                        "id": "MSG_ID_OBJ_123",
+                        "senderName": "Dr. Nickolas",
+                        "sender_pn": "5534999998888@s.whatsapp.net"
+                    }
+                }
+                """;
+
+        UazapiWebhookDto dto = objectMapper.readValue(jsonComContentObjeto, UazapiWebhookDto.class);
+
+        assertNotNull(dto);
+        assertEquals("5534999998888@s.whatsapp.net", dto.remoteJid());
+        assertEquals("Olá chatbot", dto.text());
+        assertEquals("Dr. Nickolas", dto.pushName());
+        assertEquals("5534999998888", dto.getCleanPhoneNumber());
+    }
+
+    @Test
+    @DisplayName("Deve deserializar payload com extendedTextMessage aninhado dentro de content")
+    void deveDeserializarPayloadComExtendedTextMessageAninhado() throws Exception {
+        String jsonComExtendedText = """
+                {
+                    "EventType": "messages",
+                    "chat": {
+                        "phone": "5534999998888"
+                    },
+                    "message": {
+                        "chatid": "5534999998888@s.whatsapp.net",
+                        "content": {
+                            "extendedTextMessage": {
+                                "text": "Quero revisar Cardiologia",
+                                "matchedText": "Cardiologia"
+                            }
+                        },
+                        "fromMe": false,
+                        "id": "MSG_ID_EXT_456"
+                    }
+                }
+                """;
+
+        UazapiWebhookDto dto = objectMapper.readValue(jsonComExtendedText, UazapiWebhookDto.class);
+
+        assertNotNull(dto);
+        assertEquals("5534999998888@s.whatsapp.net", dto.remoteJid());
+        assertEquals("Quero revisar Cardiologia", dto.text());
+        assertEquals("5534999998888", dto.getCleanPhoneNumber());
+    }
 }
+

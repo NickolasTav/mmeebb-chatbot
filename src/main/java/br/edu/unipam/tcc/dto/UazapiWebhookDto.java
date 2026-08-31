@@ -2,6 +2,7 @@ package br.edu.unipam.tcc.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * DTO para recepção e deserialização de eventos de webhook da Uazapi (WhatsApp).
@@ -78,8 +79,26 @@ public record UazapiWebhookDto(
     public String text() {
         if (text != null && !text.isBlank()) return text;
         if (message != null) {
-            if (message.text() != null && !message.text().isBlank()) return message.text();
-            if (message.content() != null && !message.content().isBlank()) return message.content();
+            if (message.text() != null && !message.text().isBlank()) {
+                return message.text();
+            }
+            if (message.content() != null) {
+                if (message.content().isTextual()) {
+                    return message.content().asText();
+                }
+                if (message.content().hasNonNull("text")) {
+                    return message.content().get("text").asText();
+                }
+                if (message.content().hasNonNull("body")) {
+                    return message.content().get("body").asText();
+                }
+                if (message.content().hasNonNull("conversation")) {
+                    return message.content().get("conversation").asText();
+                }
+                if (message.content().path("extendedTextMessage").hasNonNull("text")) {
+                    return message.content().path("extendedTextMessage").get("text").asText();
+                }
+            }
         }
         return "";
     }
@@ -149,7 +168,7 @@ public record UazapiWebhookDto(
     public record UazapiNestedMessage(
             @JsonProperty("chatid") String chatid,
             @JsonProperty("chatlid") String chatlid,
-            @JsonProperty("content") String content,
+            @JsonProperty("content") JsonNode content,
             @JsonProperty("fromMe") Boolean fromMe,
             @JsonProperty("id") String id,
             @JsonProperty("isGroup") Boolean isGroup,
@@ -180,3 +199,4 @@ public record UazapiWebhookDto(
             @JsonProperty("wa_name") String wa_name
     ) {}
 }
+

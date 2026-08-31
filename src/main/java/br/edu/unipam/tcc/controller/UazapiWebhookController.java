@@ -19,13 +19,12 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/webhook/uazapi")
 @RequiredArgsConstructor
 public class UazapiWebhookController {
 
     private final RabbitTemplate rabbitTemplate;
 
-    @PostMapping
+    @PostMapping({"/webhook/uazapi", "/webhook", "/"})
     public ResponseEntity<Map<String, String>> handleWebhook(@RequestBody(required = false) UazapiWebhookDto payload) {
         if (payload == null) {
             log.warn("[UazapiWebhook] Payload nulo recebido no webhook.");
@@ -37,13 +36,19 @@ public class UazapiWebhookController {
             return ResponseEntity.ok(Map.of("status", "IGNORED_FROM_ME"));
         }
 
+        if (payload.isGroupMessage()) {
+            log.debug("[UazapiWebhook] Mensagem de grupo ignorada. RemoteJid: {}", payload.remoteJid());
+            return ResponseEntity.ok(Map.of("status", "IGNORED_GROUP"));
+        }
+
         if (payload.text() == null || payload.text().isBlank()) {
             log.debug("[UazapiWebhook] Evento sem conteúdo de texto ignorado. RemoteJid: {}", payload.remoteJid());
             return ResponseEntity.ok(Map.of("status", "IGNORED_EMPTY_TEXT"));
         }
 
         String cleanPhone = payload.getCleanPhoneNumber();
-        log.info("[UazapiWebhook] Mensagem recebida de [{}] (JID: {}). Enfileirando no RabbitMQ...", cleanPhone, payload.remoteJid());
+        log.info("[UazapiWebhook] Mensagem recebida de [{}] (JID: {}, PushName: '{}', Texto: '{}'). Enfileirando no RabbitMQ...",
+                cleanPhone, payload.remoteJid(), payload.pushName(), payload.text());
 
         rabbitTemplate.convertAndSend(
                 RabbitMQConfig.EXCHANGE_NAME,

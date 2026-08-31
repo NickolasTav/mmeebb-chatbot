@@ -100,4 +100,48 @@ class UazapiWebhookDtoTest {
         assertEquals("ABCD-1234", dto.messageId());
         assertEquals("5534999998888", dto.getCleanPhoneNumber());
     }
+
+    @Test
+    @DisplayName("Deve deserializar payload aninhado nativo da UazapiGO extraindo campos polimorficamente")
+    void deveDeserializarPayloadAninhadoUazapiGo() throws Exception {
+        String jsonUazapiGo = """
+                {
+                    "BaseUrl": "https://free.uazapi.com",
+                    "EventType": "messages",
+                    "chat": {
+                        "owner": "5511999990000",
+                        "phone": "5511988887777",
+                        "wa_chatid": "5511988887777@s.whatsapp.net",
+                        "wa_name": "Aluno Teste"
+                    },
+                    "chatSource": "updated",
+                    "instanceName": "instancia-teste",
+                    "message": {
+                        "chatid": "5511988887777@s.whatsapp.net",
+                        "content": "Oi",
+                        "fromMe": false,
+                        "id": "5511999990000:MSG_ID_TESTE_999",
+                        "isGroup": false,
+                        "messageid": "MSG_ID_TESTE_999",
+                        "senderName": "Aluno Teste",
+                        "sender_pn": "5511988887777@s.whatsapp.net",
+                        "text": "Oi"
+                    },
+                    "owner": "5511999990000",
+                    "token": "token-fake-123456"
+                }
+                """;
+
+        UazapiWebhookDto dto = objectMapper.readValue(jsonUazapiGo, UazapiWebhookDto.class);
+
+        assertNotNull(dto);
+        assertEquals("messages", dto.event());
+        assertEquals("5511988887777@s.whatsapp.net", dto.remoteJid());
+        assertFalse(dto.fromMe());
+        assertEquals("Oi", dto.text());
+        assertEquals("Aluno Teste", dto.pushName());
+        assertEquals("instancia-teste", dto.instance());
+        assertEquals("MSG_ID_TESTE_999", dto.messageId());
+        assertEquals("5511988887777", dto.getCleanPhoneNumber());
+    }
 }

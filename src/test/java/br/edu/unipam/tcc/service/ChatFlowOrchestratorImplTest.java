@@ -449,4 +449,41 @@ class ChatFlowOrchestratorImplTest {
         assertTrue(sentText.contains("Você ainda não selecionou uma disciplina ativa"));
         assertTrue(sentText.contains("Trocar Disciplina/Curso"));
     }
+
+    @Test
+    @DisplayName("Deve responder com Menu Principal e saudações quando usuário enviar 'ola' ou 'oi' no MAIN_MENU")
+    void shouldSendMainMenuWhenGreetingSentInMainMenu() {
+        mockSession.setCurrentState(ChatState.MAIN_MENU);
+
+        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "ola", "instancia", "msg-14");
+
+        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
+
+        orchestrator.processIncomingMessage(webhookDto);
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
+        String sentText = messageCaptor.getValue();
+        assertTrue(sentText.contains("Menu Principal"), "Deveria conter 'Menu Principal' mas foi: " + sentText);
+        assertFalse(sentText.contains("Opção não reconhecida"), "Não deveria conter 'Opção não reconhecida'");
+    }
+
+    @Test
+    @DisplayName("Deve responder com Menu Principal quando usuário enviar 'ajuda' ou 'help' no MAIN_MENU")
+    void shouldSendMainMenuWhenHelpSentInMainMenu() {
+        mockSession.setCurrentState(ChatState.MAIN_MENU);
+
+        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "ajuda", "instancia", "msg-15");
+
+        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
+
+        orchestrator.processIncomingMessage(webhookDto);
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
+        String sentText = messageCaptor.getValue();
+        assertTrue(sentText.contains("Menu Principal"), "Deveria conter 'Menu Principal' mas foi: " + sentText);
+        assertFalse(sentText.contains("Opção não reconhecida"), "Não deveria conter 'Opção não reconhecida'");
+    }
 }
+

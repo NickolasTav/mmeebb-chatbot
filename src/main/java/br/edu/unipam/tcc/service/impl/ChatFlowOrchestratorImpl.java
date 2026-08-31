@@ -29,8 +29,15 @@ import java.util.Set;
 public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
     private static final Set<String> RESET_COMMANDS = Set.of(
-            "menu", "sair", "inicio", "início", "começo", "comeco", "reset",
-            "/menu", "/sair", "/inicio", "/start"
+            "menu", "sair", "inicio", "início", "começo", "comeco", "reset", "reiniciar",
+            "/menu", "/sair", "/inicio", "/start", "/reset"
+    );
+
+    private static final Set<String> GREETING_OR_HELP_COMMANDS = Set.of(
+            "ola", "olá", "oi", "oii", "oiii", "bom dia", "boa tarde", "boa noite",
+            "eai", "eae", "fala", "salve", "alo", "alô", "hello", "hi", "hey",
+            "ajuda", "help", "socorro", "como funciona", "opcoes", "opções", "comandos", "info",
+            "/help", "/ajuda"
     );
 
     private final ChatSessionRepository chatSessionRepository;
@@ -134,7 +141,19 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     private boolean isGlobalResetCommand(String text) {
-        return RESET_COMMANDS.contains(text.toLowerCase());
+        if (text == null || text.isBlank()) return false;
+        return RESET_COMMANDS.contains(text.toLowerCase().trim());
+    }
+
+    private boolean isGreetingOrHelpCommand(String text) {
+        if (text == null || text.isBlank()) return false;
+        String clean = text.toLowerCase().trim();
+        if (GREETING_OR_HELP_COMMANDS.contains(clean)) {
+            return true;
+        }
+        return clean.startsWith("olá") || clean.startsWith("ola") || clean.startsWith("oi ")
+                || clean.startsWith("bom dia") || clean.startsWith("boa tarde") || clean.startsWith("boa noite")
+                || clean.startsWith("ajuda") || clean.startsWith("help");
     }
 
     private void handleGlobalReset(ChatSession session, String phoneNumber) {
@@ -165,7 +184,9 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     private void handleMainMenuState(ChatSession session, String phoneNumber, String rawText, String lowerText) {
-        if ("1".equals(rawText) || lowerText.contains("revis")) {
+        if (isGreetingOrHelpCommand(lowerText)) {
+            sendMainMenuMessage(phoneNumber);
+        } else if ("1".equals(rawText) || lowerText.contains("revis")) {
             startReviewMode(session, phoneNumber);
         } else if ("2".equals(rawText) || lowerText.contains("duvid") || lowerText.contains("rag")) {
             session.setCurrentState(ChatState.RAG_DOUBT_MODE);

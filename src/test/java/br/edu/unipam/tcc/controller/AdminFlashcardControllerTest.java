@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.controller;
 
+import br.edu.unipam.tcc.config.AdminApiKeyInterceptor;
 import br.edu.unipam.tcc.dto.FlashcardRequestDto;
 import br.edu.unipam.tcc.dto.FlashcardResponseDto;
 import br.edu.unipam.tcc.dto.FlashcardStatusDto;
@@ -44,9 +45,14 @@ class AdminFlashcardControllerTest {
 
     private FlashcardResponseDto flashcardResponse;
 
+    private static final String API_KEY = "test-admin-key";
+
     @BeforeEach
     void setUp() {
+        AdminApiKeyInterceptor interceptor = new AdminApiKeyInterceptor(API_KEY);
+
         mockMvc = MockMvcBuilders.standaloneSetup(flashcardController)
+                .addInterceptors(interceptor)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 
@@ -69,11 +75,12 @@ class AdminFlashcardControllerTest {
     }
 
     @Test
-    @DisplayName("Smoke Test: Deve listar flashcards via GET /api/admin/flashcards")
+    @DisplayName("Smoke Test: Deve listar flashcards via GET /api/admin/flashcards com api_key")
     void shouldListFlashcards() throws Exception {
         when(flashcardService.findAll(10L, true)).thenReturn(List.of(flashcardResponse));
 
-        mockMvc.perform(get("/api/admin/flashcards?subjectId=10&active=true"))
+        mockMvc.perform(get("/api/admin/flashcards?subjectId=10&active=true")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(100L))
                 .andExpect(jsonPath("$[0].topic").value("Cardiologia"));
@@ -82,11 +89,22 @@ class AdminFlashcardControllerTest {
     }
 
     @Test
+    @DisplayName("Deve retornar 401 ao buscar flashcards sem api_key")
+    void shouldReturn401WhenApiKeyMissing() throws Exception {
+        mockMvc.perform(get("/api/admin/flashcards"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401));
+
+        verify(flashcardService, never()).findAll(any(), any());
+    }
+
+    @Test
     @DisplayName("Deve buscar flashcard por ID via GET /api/admin/flashcards/{id}")
     void shouldFindFlashcardById() throws Exception {
         when(flashcardService.findById(100L)).thenReturn(flashcardResponse);
 
-        mockMvc.perform(get("/api/admin/flashcards/100"))
+        mockMvc.perform(get("/api/admin/flashcards/100")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(100L))
                 .andExpect(jsonPath("$.topic").value("Cardiologia"));
@@ -113,6 +131,7 @@ class AdminFlashcardControllerTest {
         when(flashcardService.create(any(FlashcardRequestDto.class))).thenReturn(flashcardResponse);
 
         mockMvc.perform(post("/api/admin/flashcards")
+                        .header("X-API-KEY", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
@@ -131,6 +150,7 @@ class AdminFlashcardControllerTest {
         when(flashcardService.updateStatus(eq(100L), any(FlashcardStatusDto.class))).thenReturn(inactive);
 
         mockMvc.perform(patch("/api/admin/flashcards/100/status")
+                        .header("api_key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(statusDto)))
                 .andExpect(status().isOk())

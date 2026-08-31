@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.controller;
 
+import br.edu.unipam.tcc.config.AdminApiKeyInterceptor;
 import br.edu.unipam.tcc.dto.CourseRequestDto;
 import br.edu.unipam.tcc.dto.CourseResponseDto;
 import br.edu.unipam.tcc.dto.CourseStatusDto;
@@ -42,9 +43,14 @@ class AdminCourseControllerTest {
 
     private CourseResponseDto courseResponse;
 
+    private static final String API_KEY = "test-admin-key";
+
     @BeforeEach
     void setUp() {
+        AdminApiKeyInterceptor interceptor = new AdminApiKeyInterceptor(API_KEY);
+
         mockMvc = MockMvcBuilders.standaloneSetup(courseController)
+                .addInterceptors(interceptor)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 
@@ -60,11 +66,12 @@ class AdminCourseControllerTest {
     }
 
     @Test
-    @DisplayName("Smoke Test: Deve listar cursos via GET /api/admin/courses")
+    @DisplayName("Smoke Test: Deve listar cursos via GET /api/admin/courses com api_key válida")
     void shouldListAllCourses() throws Exception {
         when(courseService.findAll(null)).thenReturn(List.of(courseResponse));
 
-        mockMvc.perform(get("/api/admin/courses"))
+        mockMvc.perform(get("/api/admin/courses")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(1L))
                 .andExpect(jsonPath("$[0].code").value("MEDICINA"))
@@ -74,11 +81,23 @@ class AdminCourseControllerTest {
     }
 
     @Test
+    @DisplayName("Deve retornar 401 Unauthorized quando api_key estiver ausente")
+    void shouldReturn401WhenApiKeyIsMissing() throws Exception {
+        mockMvc.perform(get("/api/admin/courses"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+
+        verify(courseService, never()).findAll(any());
+    }
+
+    @Test
     @DisplayName("Deve buscar curso por ID via GET /api/admin/courses/{id}")
     void shouldFindCourseById() throws Exception {
         when(courseService.findById(1L)).thenReturn(courseResponse);
 
-        mockMvc.perform(get("/api/admin/courses/1"))
+        mockMvc.perform(get("/api/admin/courses/1")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(1L))
                 .andExpect(jsonPath("$.code").value("MEDICINA"));
@@ -93,6 +112,7 @@ class AdminCourseControllerTest {
         when(courseService.create(any(CourseRequestDto.class))).thenReturn(courseResponse);
 
         mockMvc.perform(post("/api/admin/courses")
+                        .header("api_key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
@@ -109,6 +129,7 @@ class AdminCourseControllerTest {
         when(courseService.update(eq(1L), any(CourseRequestDto.class))).thenReturn(courseResponse);
 
         mockMvc.perform(put("/api/admin/courses/1")
+                        .header("X-API-KEY", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
@@ -125,6 +146,7 @@ class AdminCourseControllerTest {
         when(courseService.updateStatus(eq(1L), any(CourseStatusDto.class))).thenReturn(inactiveResponse);
 
         mockMvc.perform(patch("/api/admin/courses/1/status")
+                        .header("api-key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(statusDto)))
                 .andExpect(status().isOk())
@@ -138,7 +160,8 @@ class AdminCourseControllerTest {
     void shouldActivateCourse() throws Exception {
         when(courseService.activate(1L)).thenReturn(courseResponse);
 
-        mockMvc.perform(patch("/api/admin/courses/1/activate"))
+        mockMvc.perform(patch("/api/admin/courses/1/activate")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(true));
 
@@ -151,7 +174,8 @@ class AdminCourseControllerTest {
         CourseResponseDto inactiveResponse = new CourseResponseDto(1L, "MEDICINA", "Medicina", "Desc", false, LocalDateTime.now(), LocalDateTime.now());
         when(courseService.deactivate(1L)).thenReturn(inactiveResponse);
 
-        mockMvc.perform(patch("/api/admin/courses/1/deactivate"))
+        mockMvc.perform(patch("/api/admin/courses/1/deactivate")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(false));
 

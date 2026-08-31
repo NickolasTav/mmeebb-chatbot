@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.controller;
 
+import br.edu.unipam.tcc.config.AdminApiKeyInterceptor;
 import br.edu.unipam.tcc.dto.SubjectRequestDto;
 import br.edu.unipam.tcc.dto.SubjectResponseDto;
 import br.edu.unipam.tcc.dto.SubjectStatusDto;
@@ -42,9 +43,14 @@ class AdminSubjectControllerTest {
 
     private SubjectResponseDto subjectResponse;
 
+    private static final String API_KEY = "test-admin-key";
+
     @BeforeEach
     void setUp() {
+        AdminApiKeyInterceptor interceptor = new AdminApiKeyInterceptor(API_KEY);
+
         mockMvc = MockMvcBuilders.standaloneSetup(subjectController)
+                .addInterceptors(interceptor)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 
@@ -62,11 +68,12 @@ class AdminSubjectControllerTest {
     }
 
     @Test
-    @DisplayName("Smoke Test: Deve listar matérias via GET /api/admin/subjects")
+    @DisplayName("Smoke Test: Deve listar matérias via GET /api/admin/subjects com api_key")
     void shouldListSubjects() throws Exception {
         when(subjectService.findAll(1L, true)).thenReturn(List.of(subjectResponse));
 
-        mockMvc.perform(get("/api/admin/subjects?courseId=1&active=true"))
+        mockMvc.perform(get("/api/admin/subjects?courseId=1&active=true")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(10L))
                 .andExpect(jsonPath("$[0].code").value("CLIN_MED"))
@@ -76,11 +83,22 @@ class AdminSubjectControllerTest {
     }
 
     @Test
+    @DisplayName("Deve retornar 401 ao tentar listar matérias sem api_key")
+    void shouldReturn401WhenApiKeyMissing() throws Exception {
+        mockMvc.perform(get("/api/admin/subjects"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401));
+
+        verify(subjectService, never()).findAll(any(), any());
+    }
+
+    @Test
     @DisplayName("Deve buscar matéria por ID via GET /api/admin/subjects/{id}")
     void shouldFindSubjectById() throws Exception {
         when(subjectService.findById(10L)).thenReturn(subjectResponse);
 
-        mockMvc.perform(get("/api/admin/subjects/10"))
+        mockMvc.perform(get("/api/admin/subjects/10")
+                        .header("api_key", API_KEY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(10L))
                 .andExpect(jsonPath("$.name").value("Clínica Médica"));
@@ -95,6 +113,7 @@ class AdminSubjectControllerTest {
         when(subjectService.create(any(SubjectRequestDto.class))).thenReturn(subjectResponse);
 
         mockMvc.perform(post("/api/admin/subjects")
+                        .header("X-API-KEY", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
@@ -110,6 +129,7 @@ class AdminSubjectControllerTest {
         when(subjectService.update(eq(10L), any(SubjectRequestDto.class))).thenReturn(subjectResponse);
 
         mockMvc.perform(put("/api/admin/subjects/10")
+                        .header("api_key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
@@ -126,6 +146,7 @@ class AdminSubjectControllerTest {
         when(subjectService.updateStatus(eq(10L), any(SubjectStatusDto.class))).thenReturn(inactiveResponse);
 
         mockMvc.perform(patch("/api/admin/subjects/10/status")
+                        .header("api_key", API_KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(statusDto)))
                 .andExpect(status().isOk())

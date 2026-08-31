@@ -3,7 +3,7 @@
 | Metadado | Detalhe |
 | :--- | :--- |
 | **Spec de Origem** | [`docs/specs/spec-chat-flow-orchestrator.md`](../specs/spec-chat-flow-orchestrator.md) |
-| **Status** | Pendente |
+| **Status** | Concluída |
 | **Escopo do Commit** | `orchestrator` (ex: `feat(orchestrator): implementa maquina de estados conversacional e orquestrador de fluxo`) |
 | **Complexidade** | G (Grande) |
 | **Pode Rodar em Paralelo** | Não |

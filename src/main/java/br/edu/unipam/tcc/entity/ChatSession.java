@@ -35,7 +35,7 @@ public class ChatSession {
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(name = "current_state", nullable = false, length = 50)
-    private ChatState currentState = ChatState.NOVO;
+    private ChatState currentState = ChatState.NEW;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "selected_course_id")

@@ -3,7 +3,7 @@
 | Metadado | Detalhe |
 | :--- | :--- |
 | **Spec de Origem** | [`docs/specs/spec-chat-flow-orchestrator.md`](../specs/spec-chat-flow-orchestrator.md) |
-| **Status** | Pendente |
+| **Status** | Concluída |
 | **Escopo do Commit** | `consumer` (ex: `feat(consumer): conecta whatsapp message consumer ao orquestrador de fluxo com typing presence`) |
 | **Complexidade** | M (Média) |
 | **Pode Rodar em Paralelo** | Não |

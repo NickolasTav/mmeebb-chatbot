@@ -100,14 +100,14 @@ class EntityInstantiationTest {
     }
 
     @Test
-    @DisplayName("Deve instanciar ChatSession com estado inicial NEW")
+    @DisplayName("Deve instanciar ChatSession com estado inicial NOVO")
     void deveInstanciarChatSessionCorretamente() {
         ChatSession session = ChatSession.builder()
                 .phoneNumber("5534999998888")
                 .lastInteractionAt(LocalDateTime.now())
                 .build();
 
-        assertEquals(ChatState.NEW, session.getCurrentState());
+        assertEquals(ChatState.NOVO, session.getCurrentState());
         assertEquals("5534999998888", session.getPhoneNumber());
         assertNull(session.getSelectedCourse());
     }

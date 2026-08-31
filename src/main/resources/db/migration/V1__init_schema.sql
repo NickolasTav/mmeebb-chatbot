@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS tb_chat_session (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     student_id UUID REFERENCES tb_student(id) ON DELETE SET NULL,
     phone_number VARCHAR(30) NOT NULL UNIQUE,
-    current_state VARCHAR(50) NOT NULL DEFAULT 'NEW',
+    current_state VARCHAR(50) NOT NULL DEFAULT 'NOVO',
     selected_course_id BIGINT REFERENCES tb_course(id) ON DELETE SET NULL,
     selected_subject_id BIGINT REFERENCES tb_subject(id) ON DELETE SET NULL,
     current_flashcard_id BIGINT REFERENCES tb_flashcard(id) ON DELETE SET NULL,

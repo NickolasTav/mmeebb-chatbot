@@ -49,13 +49,38 @@ class UazapiWebhookDtoTest {
     }
 
     @Test
-    @DisplayName("Deve deserializar JSON da Uazapi ignorando propriedades desconhecidas")
+    @DisplayName("Smoke Test: Deve instanciar DTO com todos os campos incluindo event e pushName")
+    void deveInstanciarDtoComCamposCompletos() {
+        UazapiWebhookDto dto = new UazapiWebhookDto(
+                "messages.upsert",
+                "5534999998888@s.whatsapp.net",
+                false,
+                "Olá bot",
+                "Níckolas Tavares",
+                "instancia-1",
+                "msg-123"
+        );
+
+        assertEquals("messages.upsert", dto.event());
+        assertEquals("5534999998888@s.whatsapp.net", dto.remoteJid());
+        assertFalse(dto.fromMe());
+        assertEquals("Olá bot", dto.text());
+        assertEquals("Níckolas Tavares", dto.pushName());
+        assertEquals("instancia-1", dto.instance());
+        assertEquals("msg-123", dto.messageId());
+        assertEquals("5534999998888", dto.getCleanPhoneNumber());
+    }
+
+    @Test
+    @DisplayName("Deve deserializar JSON da Uazapi com event e pushName ignorando propriedades desconhecidas")
     void deveDeserializarJsonComPropriedadesDesconhecidas() throws Exception {
         String json = """
                 {
+                    "event": "messages.upsert",
                     "remoteJid": "5534999998888@s.whatsapp.net",
                     "fromMe": false,
                     "text": "Quero revisar Cardiologia",
+                    "pushName": "Dr. Lucas",
                     "instance": "med-prod",
                     "messageId": "ABCD-1234",
                     "unknownField1": "valor-aleatorio",
@@ -66,9 +91,11 @@ class UazapiWebhookDtoTest {
         UazapiWebhookDto dto = objectMapper.readValue(json, UazapiWebhookDto.class);
 
         assertNotNull(dto);
+        assertEquals("messages.upsert", dto.event());
         assertEquals("5534999998888@s.whatsapp.net", dto.remoteJid());
         assertFalse(dto.fromMe());
         assertEquals("Quero revisar Cardiologia", dto.text());
+        assertEquals("Dr. Lucas", dto.pushName());
         assertEquals("med-prod", dto.instance());
         assertEquals("ABCD-1234", dto.messageId());
         assertEquals("5534999998888", dto.getCleanPhoneNumber());

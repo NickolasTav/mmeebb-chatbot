@@ -139,6 +139,19 @@ flowchart TB
     RAG <--> GEMINI
 ```
 
+### 4.1. Máquina de Estados Finita (FSM) & Comandos Conversacionais
+
+O fluxo conversacional é gerenciado por uma **FSM determinística** (`ChatFlowOrchestrator`) com separação clara de intenções:
+
+| Intenção / Ação | Gatilhos Aceitos | Comportamento no WhatsApp |
+| :--- | :--- | :--- |
+| **👋 Saudações & Ajuda** | `ola`, `olá`, `oi`, `bom dia`, `boa tarde`, `boa noite`, `ajuda`, `help`, `opções` | Envia as boas-vindas ou reexibe as orientações do sistema. |
+| **📋 Menu Principal** | `menu`, `inicio`, `início`, `começo`, `reset`, `/menu`, `/start` | Reseta a sessão para o estado `MAIN_MENU` e exibe o menu com as opções de estudo. |
+| **📚 1 - Revisão MMEEBB** | `1`, `revisar`, `revisão`, `questão`, `estudar` | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
+| **💡 2 - Modo Dúvidas (RAG)** | `2`, `duvidas`, `dúvidas`, `rag`, perguntas livres | Consulta a base vetorial (`pgvector`) com LangChain4j + Gemini e responde dúvidas do material. |
+| **🔄 3 - Trocar Disciplina** | `3`, `trocar`, `curso`, `disciplina` | Permite alternar o curso e a disciplina ativa de estudo. |
+| **🚪 Encerramento (Exit Intent)** | `sair`, `tchau`, `encerrar`, `finalizar`, `fim`, `até mais`, `flw`, `adeus`, `/sair` | **Finaliza a sessão com mensagem amigável de despedida** e limpa cards ativos, sem reenviar o menu em loop. |
+
 ---
 
 ## 5. Modelagem de Dados & DER
@@ -324,9 +337,9 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 92
+- **Total de Testes Unitários:** 105
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 0 Ignorados)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões, Pipeline RAG, Consumidores RabbitMQ, Notificações Ativas Push e Clientes REST.
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões, Tratamento de Intenção de Saída (*Exit Intent*), Pipeline RAG, Consumidores RabbitMQ, Notificações Ativas Push e Clientes REST.
 
 ---
 

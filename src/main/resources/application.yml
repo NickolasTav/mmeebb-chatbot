@@ -62,3 +62,10 @@ logging:
     br.edu.unipam.tcc: INFO
     org.springframework.web: WARN
     org.hibernate.SQL: WARN
+
+uazapi:
+  base-url: ${UAZAPI_BASE_URL:https://free.uazapi.com}
+  api-key: ${UAZAPI_API_KEY:}
+  instance: ${UAZAPI_INSTANCE:}
+  typing-delay-ms: ${UAZAPI_TYPING_DELAY_MS:2000}
+

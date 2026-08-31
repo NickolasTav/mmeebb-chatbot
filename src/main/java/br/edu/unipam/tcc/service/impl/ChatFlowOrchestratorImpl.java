@@ -8,6 +8,7 @@ import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
 import br.edu.unipam.tcc.repository.*;
 import br.edu.unipam.tcc.service.ChatFlowOrchestrator;
 import br.edu.unipam.tcc.service.MmeebbService;
+import br.edu.unipam.tcc.service.SubjectRagService;
 import br.edu.unipam.tcc.service.UazapiClientService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,9 +20,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Concrete implementation of the conversation flow orchestrator.
- * Manages the Finite State Machine (FSM), user sessions, global reset commands,
- * MMEEBB flashcard reviews, and WhatsApp messaging.
+ * Implementação do orquestrador de fluxo conversacional do Chatbot MMEEBB.
+ * Gerencia a Máquina de Estados Finita (FSM), sessões de usuários, comandos globais de reset,
+ * revisões de flashcards via motor MMEEBB, consultas RAG multidisciplinares e mensageria WhatsApp.
  */
 @Slf4j
 @Service
@@ -40,6 +41,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final RepetitionScheduleRepository repetitionScheduleRepository;
     private final MmeebbService mmeebbService;
     private final UazapiClientService uazapiClientService;
+    private final SubjectRagService subjectRagService;
 
     public ChatFlowOrchestratorImpl(
             ChatSessionRepository chatSessionRepository,
@@ -49,7 +51,8 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             FlashcardRepository flashcardRepository,
             RepetitionScheduleRepository repetitionScheduleRepository,
             MmeebbService mmeebbService,
-            UazapiClientService uazapiClientService
+            UazapiClientService uazapiClientService,
+            SubjectRagService subjectRagService
     ) {
         this.chatSessionRepository = chatSessionRepository;
         this.studentRepository = studentRepository;
@@ -59,6 +62,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         this.repetitionScheduleRepository = repetitionScheduleRepository;
         this.mmeebbService = mmeebbService;
         this.uazapiClientService = uazapiClientService;
+        this.subjectRagService = subjectRagService;
     }
 
     @Override
@@ -313,12 +317,35 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private void handleRagDoubtModeState(ChatSession session, String phoneNumber, String questionText) {
         log.info("[Orchestrator] Dúvida RAG recebida de [{}]: \"{}\"", phoneNumber, questionText);
 
-        String ragResponse = "🤖 *Tutor Virtual MMEEBB:*\n\n" +
-                "Recebi sua pergunta: \"" + questionText + "\"\n\n" +
-                "_[Modo RAG - Consulta semântica de base de conhecimento ativa]._ \n\n" +
-                "_Envie outra dúvida ou digite *menu* para voltar ao menu principal._";
+        Subject currentSubject = session.getSelectedSubject();
+        if (currentSubject == null) {
+            log.info("[Orchestrator] Aluno [{}] tentou consultar RAG sem disciplina ativa selecionada.", phoneNumber);
+            String noSubjectMsg = """
+                    ⚠️ *Você ainda não selecionou uma disciplina ativa.*
 
-        uazapiClientService.sendTextMessage(phoneNumber, ragResponse);
+                    Para que o tutor inteligente possa consultar a base de conhecimento correta:
+                    1. Digite *menu* para voltar ao Menu Principal
+                    2. Escolha a opção *3* (*Trocar Disciplina/Curso*)
+                    3. Retorne ao *Modo Dúvidas (RAG)*.
+
+                    _Digite *menu* para continuar._""";
+
+            uazapiClientService.sendTextMessage(phoneNumber, noSubjectMsg);
+            return;
+        }
+
+        String ragAnswer = subjectRagService.answerDoubt(questionText, currentSubject.getId());
+
+        String formattedMessage = String.format("""
+                🤖 *Tutor Virtual UNIPAM* (📖 *%s*)
+
+                %s
+
+                ------------------------------------
+                _Envie outra dúvida sobre a disciplina ou digite *menu* para voltar ao menu principal._""",
+                currentSubject.getName(), ragAnswer);
+
+        uazapiClientService.sendTextMessage(phoneNumber, formattedMessage);
     }
 
     private void startCourseSelection(ChatSession session, String phoneNumber) {

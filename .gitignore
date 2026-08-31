@@ -42,4 +42,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+### Documentation & Tasks (Local) ###
+docs/
+
+
 

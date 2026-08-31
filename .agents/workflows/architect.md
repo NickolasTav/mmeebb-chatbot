@@ -26,8 +26,8 @@ O usuário fornecerá a descrição de uma funcionalidade, história de usuário
    - Estratégia de testes automatizados (Smoke Tests, Unitários, Integração).
    - Análise de riscos e mitigações (anti-ban, NPEs, timeouts, vazamento de conexões).
 4. **Substitua todos os placeholders** `{{...}}` por dados técnicos reais do projeto.
-5. **Salve a especificação** em `docs/specs/` no formato `spec-{{nome-da-funcionalidade}}.md` (kebab-case).
+5. **Salve a especificação** na subpasta do módulo correspondente em `docs/{{NN}}-{{modulo}}/` no formato `spec-{{NN}}-{{nome-da-funcionalidade}}.md` (ex: `docs/03-rag-langchain4j/spec-03-rag-langchain4j.md`).
 
 ## Saída Esperada
 
-Um arquivo Markdown completo em `docs/specs/spec-*.md`, revisado e pronto para ser processado pelo **Agente Gerente**.
+Um arquivo Markdown completo em `docs/{{NN}}-{{modulo}}/spec-*.md`, revisado e pronto para ser processado pelo **Agente Gerente**.

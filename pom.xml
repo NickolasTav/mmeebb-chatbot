@@ -16,7 +16,7 @@
 
 	<properties>
 		<java.version>17</java.version>
-		<langchain4j.version>0.34.0</langchain4j.version>
+		<langchain4j.version>0.35.0</langchain4j.version>
 		<pgvector.version>0.1.6</pgvector.version>
 		<testcontainers.version>1.20.1</testcontainers.version>
 	</properties>
@@ -67,6 +67,11 @@
 		<!-- LangChain4j & AI -->
 		<dependency>
 			<groupId>dev.langchain4j</groupId>
+			<artifactId>langchain4j-spring-boot-starter</artifactId>
+			<version>${langchain4j.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>dev.langchain4j</groupId>
 			<artifactId>langchain4j</artifactId>
 			<version>${langchain4j.version}</version>
 		</dependency>
@@ -78,6 +83,11 @@
 		<dependency>
 			<groupId>dev.langchain4j</groupId>
 			<artifactId>langchain4j-pgvector</artifactId>
+			<version>${langchain4j.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>dev.langchain4j</groupId>
+			<artifactId>langchain4j-document-parser-apache-tika</artifactId>
 			<version>${langchain4j.version}</version>
 		</dependency>
 

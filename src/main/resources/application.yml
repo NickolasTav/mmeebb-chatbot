@@ -69,3 +69,8 @@ uazapi:
   instance: ${UAZAPI_INSTANCE:}
   typing-delay-ms: ${UAZAPI_TYPING_DELAY_MS:2000}
 
+gemini:
+  api-key: ${GEMINI_API_KEY:}
+  model-name: ${GEMINI_MODEL_NAME:gemini-1.5-flash}
+  temperature: ${GEMINI_TEMPERATURE:0.2}
+

@@ -14,7 +14,7 @@ public class AdminApiKeyInterceptor implements HandlerInterceptor {
 
     private final String configuredApiKey;
 
-    public AdminApiKeyInterceptor(@Value("${admin.api-key:unipam-admin-secret-key-2026}") String configuredApiKey) {
+    public AdminApiKeyInterceptor(@Value("${admin.api-key:}") String configuredApiKey) {
         this.configuredApiKey = configuredApiKey;
     }
 
@@ -34,6 +34,11 @@ public class AdminApiKeyInterceptor implements HandlerInterceptor {
         }
         if (apiKey == null || apiKey.isBlank()) {
             apiKey = request.getHeader("apikey");
+        }
+
+        if (configuredApiKey == null || configuredApiKey.isBlank()) {
+            log.error("[AdminApiKeyInterceptor] Chave de administração não configurada no servidor (ADMIN_API_KEY vazia).");
+            throw new UnauthorizedException("Acesso administrativo desabilitado: chave de API não configurada no servidor.");
         }
 
         if (apiKey == null || apiKey.isBlank()) {

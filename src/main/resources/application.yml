@@ -65,8 +65,8 @@ logging:
 
 uazapi:
   base-url: ${UAZAPI_BASE_URL:https://free.uazapi.com}
-  api-key: ${UAZAPI_API_KEY:cbc6e5ce-f3fb-419f-a81e-1a0e1f7b9f0f}
-  instance: ${UAZAPI_INSTANCE:4y0p4c}
+  api-key: ${UAZAPI_API_KEY:}
+  instance: ${UAZAPI_INSTANCE:}
   typing-delay-ms: ${UAZAPI_TYPING_DELAY_MS:2000}
 
 gemini:
@@ -75,6 +75,7 @@ gemini:
   temperature: ${GEMINI_TEMPERATURE:0.2}
 
 admin:
-  api-key: ${ADMIN_API_KEY:unipam-admin-secret-key-2026}
+  api-key: ${ADMIN_API_KEY:}
+
 
 

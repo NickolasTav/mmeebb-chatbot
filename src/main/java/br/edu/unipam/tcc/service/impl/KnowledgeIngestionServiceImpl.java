@@ -1,6 +1,8 @@
 package br.edu.unipam.tcc.service.impl;
 
 import br.edu.unipam.tcc.service.KnowledgeIngestionService;
+import br.edu.unipam.tcc.entity.Flashcard;
+import br.edu.unipam.tcc.repository.FlashcardRepository;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
 import dev.langchain4j.data.document.DocumentSplitter;
@@ -35,15 +37,18 @@ public class KnowledgeIngestionServiceImpl implements KnowledgeIngestionService 
 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
+    private final FlashcardRepository flashcardRepository;
     private final DocumentParser documentParser;
     private final DocumentSplitter documentSplitter;
 
     public KnowledgeIngestionServiceImpl(
             EmbeddingModel embeddingModel,
-            EmbeddingStore<TextSegment> embeddingStore
+            EmbeddingStore<TextSegment> embeddingStore,
+            FlashcardRepository flashcardRepository
     ) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
+        this.flashcardRepository = flashcardRepository;
         this.documentParser = new ApacheTikaDocumentParser();
         this.documentSplitter = DocumentSplitters.recursive(CHUNK_MAX_TOKENS, CHUNK_OVERLAP_TOKENS);
     }
@@ -99,6 +104,78 @@ public class KnowledgeIngestionServiceImpl implements KnowledgeIngestionService 
 
         log.info("[KnowledgeIngestion] Ingestão concluída com sucesso! Total de segmentos indexados: {}", allSegments.size());
         return allSegments.size();
+    }
+
+    @Override
+    public int ingestFlashcardsAsKnowledge(Long courseId, Long subjectId) {
+        log.info("[KnowledgeIngestion] Sincronizando flashcards para o RAG. Filtros -> Curso ID: {}, Disciplina ID: {}",
+                courseId, subjectId);
+
+        List<Flashcard> flashcards;
+        if (subjectId != null) {
+            flashcards = flashcardRepository.findBySubjectIdAndActiveTrue(subjectId);
+        } else if (courseId != null) {
+            flashcards = flashcardRepository.findByActive(true).stream()
+                    .filter(f -> f.getSubject() != null && f.getSubject().getCourse() != null &&
+                            courseId.equals(f.getSubject().getCourse().getId()))
+                    .toList();
+        } else {
+            flashcards = flashcardRepository.findByActive(true);
+        }
+
+        if (flashcards.isEmpty()) {
+            log.warn("[KnowledgeIngestion] Nenhum flashcard ativo encontrado para os filtros fornecidos.");
+            return 0;
+        }
+
+        log.info("[KnowledgeIngestion] {} flashcard(s) ativo(s) recuperado(s). Construindo segmentos de conhecimento...", flashcards.size());
+
+        List<TextSegment> segments = new ArrayList<>();
+        for (Flashcard card : flashcards) {
+            String topic = card.getTopic() != null ? card.getTopic() : "Geral";
+            String subjectName = card.getSubject() != null ? card.getSubject().getName() : "Geral";
+            String cId = (card.getSubject() != null && card.getSubject().getCourse() != null)
+                    ? card.getSubject().getCourse().getId().toString()
+                    : (courseId != null ? courseId.toString() : "1");
+            String sId = card.getSubject() != null ? card.getSubject().getId().toString()
+                    : (subjectId != null ? subjectId.toString() : "1");
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Tópico: ").append(topic).append("\n");
+            sb.append("Disciplina: ").append(subjectName).append("\n");
+            sb.append("Questão / Conceito Clínico: ").append(card.getQuestion()).append("\n");
+            sb.append("Gabarito / Resposta Correta: ").append(card.getAnswer()).append("\n");
+
+            if (card.getOptionsJson() != null && !card.getOptionsJson().isBlank()) {
+                sb.append("Opções:\n").append(card.getOptionsJson()).append("\n");
+            }
+
+            if (card.getExplanation() != null && !card.getExplanation().isBlank()) {
+                sb.append("Fundamentação Teórica e Justificativa Clínica:\n").append(card.getExplanation()).append("\n");
+            }
+
+            if (card.getSource() != null && !card.getSource().isBlank()) {
+                sb.append("Fonte / Referência Oficial: ").append(card.getSource()).append("\n");
+            }
+
+            TextSegment segment = TextSegment.from(sb.toString().trim());
+            segment.metadata().put("course_id", cId);
+            segment.metadata().put("subject_id", sId);
+            segment.metadata().put("topic", topic);
+            segment.metadata().put("source", "flashcard_" + card.getId());
+
+            segments.add(segment);
+        }
+
+        log.info("[KnowledgeIngestion] Gerando embeddings vetoriais para {} segmentos de flashcards...", segments.size());
+        Response<List<Embedding>> embeddingResponse = embeddingModel.embedAll(segments);
+        List<Embedding> embeddings = embeddingResponse.content();
+
+        log.info("[KnowledgeIngestion] Persistindo {} vetores no pgvector (tb_knowledge_embedding)...", embeddings.size());
+        embeddingStore.addAll(embeddings, segments);
+
+        log.info("[KnowledgeIngestion] Sincronização concluída com sucesso! {} flashcards indexados no RAG.", segments.size());
+        return segments.size();
     }
 
     private void validateInputs(Path directoryPath, Long courseId, Long subjectId, String topic) {

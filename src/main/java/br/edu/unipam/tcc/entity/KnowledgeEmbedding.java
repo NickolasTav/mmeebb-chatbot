@@ -21,6 +21,7 @@ public class KnowledgeEmbedding {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(name = "embedding_id")
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -31,7 +32,7 @@ public class KnowledgeEmbedding {
     @JoinColumn(name = "subject_id")
     private Subject subject;
 
-    @Column(columnDefinition = "TEXT", nullable = false)
+    @Column(name = "text", columnDefinition = "TEXT")
     private String content;
 
     @Builder.Default

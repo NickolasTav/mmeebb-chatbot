@@ -274,27 +274,50 @@ docker compose up -d
 ```
 > Isso iniciará o **PostgreSQL 16 com pgvector** na porta `5432` e o **RabbitMQ** nas portas `5672` (AMQP) e `15672` (Painel Web: [http://localhost:15672](http://localhost:15672)).
 
-### Passo 2: Configurar e Rodar o Backend Spring Boot
-Defina as variáveis de ambiente necessárias e inicialize a aplicação:
-
+### Passo 2: Configurar Variáveis de Ambiente (.env) e Rodar o Backend
+Copie o modelo de ambiente ou edite o arquivo `.env` na raiz do projeto:
 ```powershell
-# No PowerShell
-$env:UAZAPI_BASE_URL="https://free.uazapi.com"
-$env:UAZAPI_API_KEY="sua_chave_uazapi"
-$env:UAZAPI_INSTANCE="sua_instancia_uazapi"
-$env:GEMINI_API_KEY="sua_chave_gemini"
+Copy-Item .env.example .env
+```
+Preencha suas chaves no `.env`:
+```properties
+# Google Gemini (Chave gratuita em: https://aistudio.google.com/app/apikey)
+GEMINI_API_KEY=sua_chave_gemini_aqui
+GEMINI_MODEL_NAME=gemini-1.5-flash
 
+# Chave de Administração REST
+ADMIN_API_KEY=teste
+
+# Gateway Uaizap
+UAZAPI_BASE_URL=https://free.uazapi.com
+UAZAPI_API_KEY=sua_chave_uazapi
+UAZAPI_INSTANCE=sua_instancia
+```
+
+Em seguida, inicialize a aplicação:
+```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-### Passo 3: Expor a Porta Local via Ngrok
+> **💡 Dica de Custo/Performance com Google Gemini:**  
+> O modelo padrão configurado é o **`gemini-1.5-flash`** (ou `gemini-2.0-flash`), o mais econômico, rápido e com tier gratuito generoso do Google (15 requisições por minuto gratuitas). Para a geração de vetores semânticos do RAG, utilizamos o modelo oficial **`text-embedding-004`** (768 dimensões).
+
+### Passo 3: Sincronizar Flashcards e Questões no RAG (pgvector)
+Para que o tutor virtual responda a qualquer dúvida clínica ou técnica no WhatsApp com base no acervo de mais de 85 questões cadastradas, execute a sincronização via endpoint administrativo:
+
+```powershell
+curl.exe -i -X POST "http://localhost:8080/api/admin/rag/sync-flashcards" -H "X-API-KEY: teste"
+```
+*(Ou passe `?courseId=1` ou `?subjectId=1` para sincronizar uma disciplina específica).*
+
+### Passo 4: Expor a Porta Local via Ngrok
 Em um terminal separado:
 ```powershell
 ngrok http 8080
 ```
 Copie a URL pública HTTPS gerada (ex: `https://xxxx.ngrok-free.app`).
 
-### Passo 4: Configurar o Webhook na Uazapi
+### Passo 5: Configurar o Webhook na Uazapi
 No painel da Uazapi, configure:
 - **Webhook URL:** `https://xxxx.ngrok-free.app/webhook/uazapi`
 - **Eventos:** `messages.upsert` (ou `messages`)
@@ -315,7 +338,8 @@ No painel da Uazapi, configure:
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
 | `UAZAPI_TYPING_DELAY_MS` | `2000` | Delay simulado de digitação (*composing*) |
 | `GEMINI_API_KEY` | *(Vazio)* | Chave de API do Google AI Studio (Gemini) |
-| `GEMINI_MODEL_NAME` | `gemini-1.5-flash` | Modelo de IA para RAG e Tutor Clínico |
+| `GEMINI_MODEL_NAME` | `gemini-1.5-flash` | Modelo de IA para RAG e Tutor Clínico (mais econômico) |
+| `ADMIN_API_KEY` | `teste` | Chave de segurança para endpoints `/api/admin/**` |
 
 ---
 
@@ -337,9 +361,9 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 105
+- **Total de Testes Unitários:** 171
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 0 Ignorados)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões, Tratamento de Intenção de Saída (*Exit Intent*), Pipeline RAG, Consumidores RabbitMQ, Notificações Ativas Push e Clientes REST.
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões, Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG, Consumidores RabbitMQ, Notificações Ativas Push e Controladores Administrativos.
 
 ---
 

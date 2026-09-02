@@ -107,6 +107,7 @@ public class KnowledgeIngestionServiceImpl implements KnowledgeIngestionService 
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public int ingestFlashcardsAsKnowledge(Long courseId, Long subjectId) {
         log.info("[KnowledgeIngestion] Sincronizando flashcards para o RAG. Filtros -> Curso ID: {}, Disciplina ID: {}",
                 courseId, subjectId);
@@ -167,15 +168,32 @@ public class KnowledgeIngestionServiceImpl implements KnowledgeIngestionService 
             segments.add(segment);
         }
 
-        log.info("[KnowledgeIngestion] Gerando embeddings vetoriais para {} segmentos de flashcards...", segments.size());
-        Response<List<Embedding>> embeddingResponse = embeddingModel.embedAll(segments);
-        List<Embedding> embeddings = embeddingResponse.content();
+        int totalSegments = segments.size();
+        int batchSize = 25;
+        log.info("[KnowledgeIngestion] Processando {} segmentos de flashcards em lotes de até {}...", totalSegments, batchSize);
 
-        log.info("[KnowledgeIngestion] Persistindo {} vetores no pgvector (tb_knowledge_embedding)...", embeddings.size());
-        embeddingStore.addAll(embeddings, segments);
+        try {
+            for (int i = 0; i < totalSegments; i += batchSize) {
+                int end = Math.min(i + batchSize, totalSegments);
+                List<TextSegment> batch = segments.subList(i, end);
+                log.info("[KnowledgeIngestion] Gerando embeddings para lote {} a {} de {}...", i + 1, end, totalSegments);
 
-        log.info("[KnowledgeIngestion] Sincronização concluída com sucesso! {} flashcards indexados no RAG.", segments.size());
-        return segments.size();
+                Response<List<Embedding>> embeddingResponse = embeddingModel.embedAll(batch);
+                List<Embedding> embeddings = embeddingResponse.content();
+
+                log.info("[KnowledgeIngestion] Armazenando {} vetores no pgvector...", embeddings.size());
+                embeddingStore.addAll(embeddings, batch);
+            }
+        } catch (Exception ex) {
+            log.error("[KnowledgeIngestion] Erro ao gerar embeddings ou persistir no pgvector: {}", ex.getMessage(), ex);
+            throw new br.edu.unipam.tcc.exception.BusinessException(
+                    "Falha ao gerar embeddings ou salvar no pgvector. Verifique a chave GEMINI_API_KEY e o banco: " + ex.getMessage(),
+                    ex
+            );
+        }
+
+        log.info("[KnowledgeIngestion] Sincronização concluída com sucesso! {} flashcards indexados no RAG.", totalSegments);
+        return totalSegments;
     }
 
     private void validateInputs(Path directoryPath, Long courseId, Long subjectId, String topic) {

@@ -474,7 +474,7 @@ class ChatFlowOrchestratorImplTest {
     }
 
     @Test
-    @DisplayName("Deve acionar SubjectRagService quando no MODO_RAG_DUVIDAS e disciplina estiver selecionada")
+    @DisplayName("Deve acionar SubjectRagService globalmente quando no MODO_RAG_DUVIDAS")
     void shouldCallSubjectRagServiceWhenInRagDoubtModeAndSubjectIsSelected() {
         Subject mockSubject = Subject.builder().id(10L).name("Cardiologia").code("CARD").build();
         mockSession.setCurrentState(ChatState.RAG_DOUBT_MODE);
@@ -484,12 +484,12 @@ class ChatFlowOrchestratorImplTest {
         UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, doubt, "instancia", "msg-12");
 
         when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(subjectRagService.answerDoubt(doubt, 10L))
+        when(subjectRagService.answerDoubt(doubt, null))
                 .thenReturn("A ICFER apresenta FE < 40%, enquanto a ICFEN possui FE >= 50% com disfunção diastólica.");
 
         orchestrator.processIncomingMessage(webhookDto);
 
-        verify(subjectRagService, times(1)).answerDoubt(doubt, 10L);
+        verify(subjectRagService, times(1)).answerDoubt(doubt, null);
 
         ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
         verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
@@ -500,8 +500,8 @@ class ChatFlowOrchestratorImplTest {
     }
 
     @Test
-    @DisplayName("Deve orientar seleção de disciplina quando no MODO_RAG_DUVIDAS e nenhuma disciplina estiver selecionada")
-    void shouldPromptToSelectSubjectWhenInRagDoubtModeAndNoSubjectIsSelected() {
+    @DisplayName("Deve realizar consulta RAG global quando no MODO_RAG_DUVIDAS sem disciplina selecionada")
+    void shouldQueryGlobalRagWhenInRagDoubtModeAndNoSubjectIsSelected() {
         mockSession.setCurrentState(ChatState.RAG_DOUBT_MODE);
         mockSession.setSelectedSubject(null);
 
@@ -509,16 +509,18 @@ class ChatFlowOrchestratorImplTest {
         UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, doubt, "instancia", "msg-13");
 
         when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
+        when(subjectRagService.answerDoubt(doubt, null))
+                .thenReturn("O tratamento envolve ressuscitação volêmica precoce e noradrenalina.");
 
         orchestrator.processIncomingMessage(webhookDto);
 
-        verify(subjectRagService, never()).answerDoubt(anyString(), anyLong());
+        verify(subjectRagService, times(1)).answerDoubt(doubt, null);
 
         ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
         verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
         String sentText = messageCaptor.getValue();
-        assertTrue(sentText.contains("Você ainda não selecionou uma disciplina ativa"));
-        assertTrue(sentText.contains("Trocar Disciplina/Curso"));
+        assertTrue(sentText.contains("Tutor Virtual UNIPAM"));
+        assertTrue(sentText.contains("ressuscitação volêmica"));
     }
 
     @Test

@@ -106,15 +106,48 @@ class SubjectRagServiceImplTest {
     }
 
     @Test
-    @DisplayName("Deve lançar exceção quando pergunta ou subjectId forem nulos ou vazios")
-    void deveLancarExcecaoQuandoParametrosForemNulosOuVazios() {
+    @DisplayName("Deve responder dúvida com busca global quando subjectId for nulo")
+    void deveResponderDuvidaComBuscaGlobalQuandoSubjectIdForNulo() {
+        // Arrange
+        String question = "Quais são as causas de síndrome coronariana aguda?";
+
+        Embedding queryEmbedding = new Embedding(new float[]{0.1f, 0.2f});
+        when(embeddingModel.embed(question)).thenReturn(Response.from(queryEmbedding));
+
+        TextSegment contextSegment = TextSegment.from("IAMCSST: Oclusão trombótica coronariana aguda.");
+        EmbeddingMatch<TextSegment> match = new EmbeddingMatch<>(0.89, "match-id-2", queryEmbedding, contextSegment);
+        EmbeddingSearchResult<TextSegment> searchResult = new EmbeddingSearchResult<>(List.of(match));
+
+        when(embeddingStore.search(any(EmbeddingSearchRequest.class))).thenReturn(searchResult);
+
+        String generatedAnswer = "💡 *Tutor MMEEBB:* A principal causa é a ruptura de placa aterosclerótica com trombose.";
+        when(chatLanguageModel.generate(anyList())).thenReturn(Response.from(AiMessage.from(generatedAnswer)));
+
+        // Act
+        String result = subjectRagService.answerDoubt(question, null);
+
+        // Assert
+        assertThat(result).isNotNull();
+        assertThat(result).contains("ruptura de placa");
+
+        // Valida que NÃO houve filtro por subject_id (busca global)
+        ArgumentCaptor<EmbeddingSearchRequest> searchCaptor = ArgumentCaptor.forClass(EmbeddingSearchRequest.class);
+        verify(embeddingStore, times(1)).search(searchCaptor.capture());
+
+        EmbeddingSearchRequest capturedRequest = searchCaptor.getValue();
+        assertThat(capturedRequest.filter()).isNull();
+    }
+
+    @Test
+    @DisplayName("Deve lançar exceção quando pergunta for nula ou vazia")
+    void deveLancarExcecaoQuandoPerguntaForNulaOuVazia() {
         assertThatThrownBy(() -> subjectRagService.answerDoubt(null, 10L))
                 .isInstanceOf(IllegalArgumentException.class);
 
         assertThatThrownBy(() -> subjectRagService.answerDoubt("   ", 10L))
                 .isInstanceOf(IllegalArgumentException.class);
 
-        assertThatThrownBy(() -> subjectRagService.answerDoubt("Pergunta válida", null))
+        assertThatThrownBy(() -> subjectRagService.answerDoubt(null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

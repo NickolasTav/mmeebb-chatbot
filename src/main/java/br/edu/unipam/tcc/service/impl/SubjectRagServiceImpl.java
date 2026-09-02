@@ -61,31 +61,36 @@ public class SubjectRagServiceImpl implements SubjectRagService {
 
     @Override
     public String answerDoubt(String userQuestion, Long subjectId) {
-        validateInputs(userQuestion, subjectId);
+        validateInputs(userQuestion);
 
         String trimmedQuestion = userQuestion.trim();
-        log.info("[SubjectRag] Processando dúvida para Disciplina ID: [{}]: \"{}\"", subjectId, trimmedQuestion);
+        log.info("[SubjectRag] Processando dúvida no RAG (Disciplina ID: {}): \"{}\"",
+                subjectId != null ? subjectId : "TODAS (Global)", trimmedQuestion);
 
         try {
             // 1. Gera o vetor de embedding para a pergunta do estudante
             Embedding queryEmbedding = embeddingModel.embed(trimmedQuestion).content();
 
-            // 2. Constrói a busca vetorial estritamente filtrada pela disciplina
-            EmbeddingSearchRequest searchRequest = EmbeddingSearchRequest.builder()
+            // 2. Constrói a busca vetorial (global ou filtrada por disciplina caso informada)
+            EmbeddingSearchRequest.EmbeddingSearchRequestBuilder requestBuilder = EmbeddingSearchRequest.builder()
                     .queryEmbedding(queryEmbedding)
                     .maxResults(MAX_RESULTS)
-                    .minScore(MIN_SIMILARITY_SCORE)
-                    .filter(new IsEqualTo("subject_id", subjectId.toString()))
-                    .build();
+                    .minScore(MIN_SIMILARITY_SCORE);
+
+            if (subjectId != null) {
+                requestBuilder.filter(new IsEqualTo("subject_id", subjectId.toString()));
+            }
+
+            EmbeddingSearchRequest searchRequest = requestBuilder.build();
 
             // 3. Executa a busca no pgvector
             EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequest);
             List<EmbeddingMatch<TextSegment>> matches = searchResult != null ? searchResult.matches() : List.of();
 
             if (matches == null || matches.isEmpty()) {
-                log.info("[SubjectRag] Nenhum trecho com relevância mínima encontrado no pgvector para Disciplina ID: {}", subjectId);
+                log.info("[SubjectRag] Nenhum trecho com relevância mínima encontrado no pgvector para a dúvida.");
                 return """
-                        ⚠️ *Não encontrei referências sobre este tema no material oficial da disciplina cadastrada.*
+                        ⚠️ *Não encontrei referências sobre este tema no acervo de conhecimento cadastrado.*
 
                         _Tente reformular sua pergunta com outros termos ou consulte o preceptor/professor responsável._""";
             }
@@ -105,9 +110,9 @@ public class SubjectRagServiceImpl implements SubjectRagService {
             // 5. Constrói as mensagens de diálogo para o modelo de linguagem (Gemini)
             SystemMessage systemMessage = SystemMessage.from(SYSTEM_PROMPT_TEMPLATE);
             String userPromptContent = String.format("""
-                    CONTEXTO RECUPERADO DA DISCIPLINA:
+                    CONTEXTO RECUPERADO DA BASE DE CONHECIMENTO:
                     %s
-                    
+
                     DÚVIDA DO ESTUDANTE:
                     %s
                     """, contextBuilder, trimmedQuestion);
@@ -125,8 +130,7 @@ public class SubjectRagServiceImpl implements SubjectRagService {
             return responseText;
 
         } catch (Exception e) {
-            log.error("[SubjectRag] Erro inesperado durante processamento RAG para Disciplina [{}]: {}",
-                    subjectId, e.getMessage(), e);
+            log.error("[SubjectRag] Erro inesperado durante processamento RAG: {}", e.getMessage(), e);
 
             return """
                     ⚠️ *Desculpe, ocorreu uma instabilidade momentânea ao consultar a base de conhecimento de IA.*
@@ -135,12 +139,9 @@ public class SubjectRagServiceImpl implements SubjectRagService {
         }
     }
 
-    private void validateInputs(String userQuestion, Long subjectId) {
+    private void validateInputs(String userQuestion) {
         if (userQuestion == null || userQuestion.isBlank()) {
             throw new IllegalArgumentException("A dúvida do usuário não pode ser nula ou vazia.");
-        }
-        if (subjectId == null) {
-            throw new IllegalArgumentException("O ID da disciplina (subjectId) é obrigatório para a consulta RAG.");
         }
     }
 }

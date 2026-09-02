@@ -205,8 +205,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 📋 *Menu Principal*
                 *1* - 📚 Modo Revisão MMEEBB
-                *2* - 💡 Modo Dúvidas (RAG)
-                *3* - 🔄 Trocar Disciplina/Curso
+                *2* - 💡 Modo Dúvidas (RAG Global)
 
                 _Digite o número da opção desejada para começar._""";
 
@@ -223,10 +222,10 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             chatSessionRepository.save(session);
 
             String ragMsg = """
-                    💡 *Modo Dúvidas e RAG Ativado*
+                    💡 *Modo Dúvidas e RAG Global Ativado*
                     
-                    Envie sua pergunta ou dúvida clínica/acadêmica.
-                    Nosso tutor inteligente consultará a base de conhecimento para te auxiliar!
+                    Envie sua pergunta ou dúvida clínica/acadêmica sobre qualquer assunto do banco.
+                    Nosso tutor inteligente consultará todo o acervo para te auxiliar!
                     
                     _A qualquer momento, digite *menu* para voltar ao menu principal._""";
             uazapiClientService.sendTextMessage(phoneNumber, ragMsg);
@@ -238,8 +237,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                     
                     Por favor, escolha uma das opções válidas:
                     *1* - 📚 Modo Revisão MMEEBB
-                    *2* - 💡 Modo Dúvidas (RAG)
-                    *3* - 🔄 Trocar Disciplina/Curso
+                    *2* - 💡 Modo Dúvidas (RAG Global)
                     
                     _Ou digite *menu* para reiniciar o fluxo._""";
             uazapiClientService.sendTextMessage(phoneNumber, invalidMsg);
@@ -369,32 +367,19 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         log.info("[Orchestrator] Dúvida RAG recebida de [{}]: \"{}\"", phoneNumber, questionText);
 
         Subject currentSubject = session.getSelectedSubject();
-        if (currentSubject == null) {
-            log.info("[Orchestrator] Aluno [{}] tentou consultar RAG sem disciplina ativa selecionada.", phoneNumber);
-            String noSubjectMsg = """
-                    ⚠️ *Você ainda não selecionou uma disciplina ativa.*
+        String subjectHeader = (currentSubject != null) ? "📖 *" + currentSubject.getName() + "*" : "🌐 *Acervo Geral*";
 
-                    Para que o tutor inteligente possa consultar a base de conhecimento correta:
-                    1. Digite *menu* para voltar ao Menu Principal
-                    2. Escolha a opção *3* (*Trocar Disciplina/Curso*)
-                    3. Retorne ao *Modo Dúvidas (RAG)*.
-
-                    _Digite *menu* para continuar._""";
-
-            uazapiClientService.sendTextMessage(phoneNumber, noSubjectMsg);
-            return;
-        }
-
-        String ragAnswer = subjectRagService.answerDoubt(questionText, currentSubject.getId());
+        // Modo RAG Global: Consulta todo o acervo de conhecimento/questões indexadas no pgvector
+        String ragAnswer = subjectRagService.answerDoubt(questionText, null);
 
         String formattedMessage = String.format("""
-                🤖 *Tutor Virtual UNIPAM* (📖 *%s*)
+                🤖 *Tutor Virtual UNIPAM* (%s)
 
                 %s
 
                 ------------------------------------
-                _Envie outra dúvida sobre a disciplina ou digite *menu* para voltar ao menu principal._""",
-                currentSubject.getName(), ragAnswer);
+                _Envie outra dúvida ou digite *menu* para voltar ao menu principal._""",
+                subjectHeader, ragAnswer);
 
         uazapiClientService.sendTextMessage(phoneNumber, formattedMessage);
     }
@@ -514,8 +499,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 
                 Escolha uma das opções abaixo:
                 *1* - 📚 Modo Revisão MMEEBB
-                *2* - 💡 Modo Dúvidas (RAG)
-                *3* - 🔄 Trocar Disciplina/Curso
+                *2* - 💡 Modo Dúvidas (RAG Global)
                 
                 _Digite o número da opção desejada ou *sair* para finalizar._""";
         uazapiClientService.sendTextMessage(phoneNumber, menuMsg);

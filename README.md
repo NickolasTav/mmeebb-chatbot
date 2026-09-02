@@ -148,8 +148,7 @@ O fluxo conversacional é gerenciado por uma **FSM determinística** (`ChatFlowO
 | **👋 Saudações & Ajuda** | `ola`, `olá`, `oi`, `bom dia`, `boa tarde`, `boa noite`, `ajuda`, `help`, `opções` | Envia as boas-vindas ou reexibe as orientações do sistema. |
 | **📋 Menu Principal** | `menu`, `inicio`, `início`, `começo`, `reset`, `/menu`, `/start` | Reseta a sessão para o estado `MAIN_MENU` e exibe o menu com as opções de estudo. |
 | **📚 1 - Revisão MMEEBB** | `1`, `revisar`, `revisão`, `questão`, `estudar` | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
-| **💡 2 - Modo Dúvidas (RAG)** | `2`, `duvidas`, `dúvidas`, `rag`, perguntas livres | Consulta a base vetorial (`pgvector`) com LangChain4j + Gemini e responde dúvidas do material. |
-| **🔄 3 - Trocar Disciplina** | `3`, `trocar`, `curso`, `disciplina` | Permite alternar o curso e a disciplina ativa de estudo. |
+| **💡 2 - Modo Dúvidas (RAG Global)** | `2`, `duvidas`, `dúvidas`, `rag`, perguntas livres | Consulta todo o acervo vetorial (`pgvector`) sem restrição de matéria, respondendo dúvidas via Gemini. |
 | **🚪 Encerramento (Exit Intent)** | `sair`, `tchau`, `encerrar`, `finalizar`, `fim`, `até mais`, `flw`, `adeus`, `/sair` | **Finaliza a sessão com mensagem amigável de despedida** e limpa cards ativos, sem reenviar o menu em loop. |
 
 ---

@@ -25,13 +25,16 @@ public class LangChain4jConfig {
 
     public static final String EMBEDDING_TABLE = "tb_knowledge_embedding";
     public static final int EMBEDDING_DIMENSION = 768;
-    public static final String EMBEDDING_MODEL_NAME = "text-embedding-004";
+    public static final String DEFAULT_EMBEDDING_MODEL_NAME = "gemini-embedding-001";
 
     @Value("${gemini.api-key:}")
     private String geminiApiKey;
 
-    @Value("${gemini.model-name:gemini-1.5-flash}")
+    @Value("${gemini.model-name:gemini-3.5-flash}")
     private String geminiModelName;
+
+    @Value("${gemini.embedding-model-name:gemini-embedding-001}")
+    private String geminiEmbeddingModelName;
 
     @Value("${gemini.temperature:0.2}")
     private Double geminiTemperature;
@@ -52,12 +55,17 @@ public class LangChain4jConfig {
     @Bean
     public EmbeddingModel embeddingModel() {
         String effectiveKey = resolveApiKey();
+        String effectiveEmbeddingModel = (geminiEmbeddingModelName != null && !geminiEmbeddingModelName.isBlank())
+                ? geminiEmbeddingModelName.trim()
+                : DEFAULT_EMBEDDING_MODEL_NAME;
+
         log.info("[LangChain4jConfig] Inicializando EmbeddingModel (Google Gemini: {}, Dim: {})",
-                EMBEDDING_MODEL_NAME, EMBEDDING_DIMENSION);
+                effectiveEmbeddingModel, EMBEDDING_DIMENSION);
 
         return GoogleAiEmbeddingModel.builder()
                 .apiKey(effectiveKey)
-                .modelName(EMBEDDING_MODEL_NAME)
+                .modelName(effectiveEmbeddingModel)
+                .outputDimensionality(EMBEDDING_DIMENSION)
                 .build();
     }
 

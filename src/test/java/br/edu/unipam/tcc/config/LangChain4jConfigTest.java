@@ -33,10 +33,11 @@ class LangChain4jConfigTest {
     }
 
     @Test
-    @DisplayName("Deve instanciar EmbeddingModel com modelo text-embedding-004")
+    @DisplayName("Deve instanciar EmbeddingModel com modelo gemini-embedding-001 e dimensões 768")
     void deveInstanciarEmbeddingModelComDimensoes768() {
         LangChain4jConfig config = new LangChain4jConfig();
         ReflectionTestUtils.setField(config, "geminiApiKey", "test-api-key");
+        ReflectionTestUtils.setField(config, "geminiEmbeddingModelName", "gemini-embedding-001");
 
         EmbeddingModel embeddingModel = config.embeddingModel();
 

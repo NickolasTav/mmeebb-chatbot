@@ -283,7 +283,8 @@ Preencha suas chaves no `.env`:
 ```properties
 # Google Gemini (Chave gratuita em: https://aistudio.google.com/app/apikey)
 GEMINI_API_KEY=sua_chave_gemini_aqui
-GEMINI_MODEL_NAME=gemini-1.5-flash
+GEMINI_MODEL_NAME=gemini-3.5-flash
+GEMINI_EMBEDDING_MODEL_NAME=gemini-embedding-001
 
 # Chave de Administração REST
 ADMIN_API_KEY=teste
@@ -300,7 +301,7 @@ Em seguida, inicialize a aplicação:
 ```
 
 > **💡 Dica de Custo/Performance com Google Gemini:**  
-> O modelo padrão configurado é o **`gemini-1.5-flash`** (ou `gemini-2.0-flash`), o mais econômico, rápido e com tier gratuito generoso do Google (15 requisições por minuto gratuitas). Para a geração de vetores semânticos do RAG, utilizamos o modelo oficial **`text-embedding-004`** (768 dimensões).
+> O modelo padrão configurado é o **`gemini-3.5-flash`** (ou `gemini-3.6-flash`), a geração mais moderna, econômica e de altíssima velocidade do Google. Para a geração de vetores semânticos do RAG, utilizamos o modelo oficial **`gemini-embedding-001`** configurado com `outputDimensionality: 768` (dimensões compatíveis com o índice HNSW do pgvector).
 
 ### Passo 3: Sincronizar Flashcards e Questões no RAG (pgvector)
 Para que o tutor virtual responda a qualquer dúvida clínica ou técnica no WhatsApp com base no acervo de mais de 85 questões cadastradas, execute a sincronização via endpoint administrativo:

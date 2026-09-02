@@ -52,13 +52,16 @@ public class LangChain4jConfig {
         log.info("[LangChain4jConfig] Inicializando ChatLanguageModel (Google Gemini: {}, Temp: {}, Timeout: {}s)",
                 effectiveChatModel, geminiTemperature, DEFAULT_TIMEOUT.getSeconds());
 
-        return GoogleAiGeminiChatModel.builder()
+        GoogleAiGeminiChatModel chatModel = GoogleAiGeminiChatModel.builder()
                 .apiKey(effectiveKey)
                 .modelName(effectiveChatModel)
                 .temperature(geminiTemperature)
                 .timeout(DEFAULT_TIMEOUT)
                 .maxRetries(DEFAULT_MAX_RETRIES)
                 .build();
+
+        dev.langchain4j.model.googleai.GeminiServiceCustomizer.configureTimeouts(chatModel, DEFAULT_TIMEOUT);
+        return chatModel;
     }
 
     @Bean
@@ -71,13 +74,16 @@ public class LangChain4jConfig {
         log.info("[LangChain4jConfig] Inicializando EmbeddingModel (Google Gemini: {}, Dim: {}, Timeout: {}s)",
                 effectiveEmbeddingModel, EMBEDDING_DIMENSION, DEFAULT_TIMEOUT.getSeconds());
 
-        return GoogleAiEmbeddingModel.builder()
+        GoogleAiEmbeddingModel embeddingModel = GoogleAiEmbeddingModel.builder()
                 .apiKey(effectiveKey)
                 .modelName(effectiveEmbeddingModel)
                 .outputDimensionality(EMBEDDING_DIMENSION)
                 .timeout(DEFAULT_TIMEOUT)
                 .maxRetries(DEFAULT_MAX_RETRIES)
                 .build();
+
+        dev.langchain4j.model.googleai.GeminiServiceCustomizer.configureTimeouts(embeddingModel, DEFAULT_TIMEOUT);
+        return embeddingModel;
     }
 
     @Bean

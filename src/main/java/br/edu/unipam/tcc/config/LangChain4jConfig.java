@@ -13,10 +13,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import javax.sql.DataSource;
+import java.time.Duration;
 
 /**
  * Configuração Spring para integração do LangChain4j com Google Gemini e pgvector.
- * Configura os beans ChatLanguageModel, EmbeddingModel (text-embedding-004 com 768 dimensões)
+ * Configura os beans ChatLanguageModel, EmbeddingModel (gemini-embedding-001 com 768 dimensões)
  * e PgVectorEmbeddingStore apontando para a tabela tb_knowledge_embedding.
  */
 @Slf4j
@@ -26,11 +27,13 @@ public class LangChain4jConfig {
     public static final String EMBEDDING_TABLE = "tb_knowledge_embedding";
     public static final int EMBEDDING_DIMENSION = 768;
     public static final String DEFAULT_EMBEDDING_MODEL_NAME = "gemini-embedding-001";
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
+    public static final int DEFAULT_MAX_RETRIES = 3;
 
     @Value("${gemini.api-key:}")
     private String geminiApiKey;
 
-    @Value("${gemini.model-name:gemini-3.5-flash}")
+    @Value("${gemini.model-name:gemini-3.5-flash-lite}")
     private String geminiModelName;
 
     @Value("${gemini.embedding-model-name:gemini-embedding-001}")
@@ -42,13 +45,19 @@ public class LangChain4jConfig {
     @Bean
     public ChatLanguageModel chatLanguageModel() {
         String effectiveKey = resolveApiKey();
-        log.info("[LangChain4jConfig] Inicializando ChatLanguageModel (Google Gemini: {}, Temp: {})",
-                geminiModelName, geminiTemperature);
+        String effectiveChatModel = (geminiModelName != null && !geminiModelName.isBlank())
+                ? geminiModelName.trim()
+                : "gemini-3.5-flash-lite";
+
+        log.info("[LangChain4jConfig] Inicializando ChatLanguageModel (Google Gemini: {}, Temp: {}, Timeout: {}s)",
+                effectiveChatModel, geminiTemperature, DEFAULT_TIMEOUT.getSeconds());
 
         return GoogleAiGeminiChatModel.builder()
                 .apiKey(effectiveKey)
-                .modelName(geminiModelName)
+                .modelName(effectiveChatModel)
                 .temperature(geminiTemperature)
+                .timeout(DEFAULT_TIMEOUT)
+                .maxRetries(DEFAULT_MAX_RETRIES)
                 .build();
     }
 
@@ -59,13 +68,15 @@ public class LangChain4jConfig {
                 ? geminiEmbeddingModelName.trim()
                 : DEFAULT_EMBEDDING_MODEL_NAME;
 
-        log.info("[LangChain4jConfig] Inicializando EmbeddingModel (Google Gemini: {}, Dim: {})",
-                effectiveEmbeddingModel, EMBEDDING_DIMENSION);
+        log.info("[LangChain4jConfig] Inicializando EmbeddingModel (Google Gemini: {}, Dim: {}, Timeout: {}s)",
+                effectiveEmbeddingModel, EMBEDDING_DIMENSION, DEFAULT_TIMEOUT.getSeconds());
 
         return GoogleAiEmbeddingModel.builder()
                 .apiKey(effectiveKey)
                 .modelName(effectiveEmbeddingModel)
                 .outputDimensionality(EMBEDDING_DIMENSION)
+                .timeout(DEFAULT_TIMEOUT)
+                .maxRetries(DEFAULT_MAX_RETRIES)
                 .build();
     }
 

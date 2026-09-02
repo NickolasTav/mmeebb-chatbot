@@ -71,7 +71,7 @@ uazapi:
 
 gemini:
   api-key: ${GEMINI_API_KEY:}
-  model-name: ${GEMINI_MODEL_NAME:gemini-3.5-flash}
+  model-name: ${GEMINI_MODEL_NAME:gemini-3.5-flash-lite}
   embedding-model-name: ${GEMINI_EMBEDDING_MODEL_NAME:gemini-embedding-001}
   temperature: ${GEMINI_TEMPERATURE:0.2}
 

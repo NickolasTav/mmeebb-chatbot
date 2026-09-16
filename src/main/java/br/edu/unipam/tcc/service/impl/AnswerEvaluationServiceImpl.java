@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 
 import java.text.Normalizer;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Avaliação de respostas com correção semântica via Google Gemini.
@@ -37,6 +39,9 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
             {"correct": true|false, "feedback": "<comentário de no máximo 200 caracteres>"}
 
             O feedback deve ser direto e pedagógico, em português do Brasil, dirigido ao estudante.""";
+
+    private static final Pattern CHOICE_LETTER =
+            Pattern.compile("^(?:letra|opcao|alternativa)?\\s*([a-z])(?:\\s|$)");
 
     private final ChatLanguageModel chatLanguageModel;
     private final ObjectMapper objectMapper;
@@ -104,9 +109,18 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
         }
     }
 
+    /**
+     * O gabarito de múltipla escolha é apenas a letra, mas o estudante costuma responder
+     * colando a alternativa inteira ("A) Inibidor de SGLT2..."). Extrai a letra inicial.
+     */
     private boolean matchesChoiceLetter(String student, String expected) {
-        String cleaned = student.replaceAll("(?i)^(letra|opcao|opção|alternativa)\\s*", "");
-        return normalize(cleaned).equals(normalize(expected));
+        String expectedLetter = normalize(expected);
+        if (expectedLetter.length() != 1) {
+            return normalize(student).equals(expectedLetter);
+        }
+
+        Matcher matcher = CHOICE_LETTER.matcher(normalize(student));
+        return matcher.find() && matcher.group(1).equals(expectedLetter);
     }
 
     private String normalize(String value) {

@@ -30,4 +30,14 @@ public interface KnowledgeIngestionService {
      * @return Quantidade total de flashcards sincronizados na base vetorial.
      */
     int ingestFlashcardsAsKnowledge(Long courseId, Long subjectId);
+
+    /**
+     * Indexa um conteúdo recebido diretamente no corpo da requisição, sem depender de
+     * arquivos no servidor. O texto é segmentado e cada trecho recebe os metadados
+     * course_id, subject_id e topic que particionam a busca vetorial por matéria.
+     *
+     * @param request Conteúdo e classificação (curso, disciplina, tópico).
+     * @return Quantidade de segmentos indexados.
+     */
+    int ingestContent(br.edu.unipam.tcc.dto.KnowledgeIngestRequestDto request);
 }

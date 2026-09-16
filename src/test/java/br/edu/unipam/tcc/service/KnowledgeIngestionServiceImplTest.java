@@ -6,6 +6,7 @@ import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.DifficultyLevel;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
+import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.KnowledgeIngestionServiceImpl;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -34,6 +35,7 @@ class KnowledgeIngestionServiceImplTest {
     private EmbeddingModel embeddingModel;
     private EmbeddingStore<TextSegment> embeddingStore;
     private FlashcardRepository flashcardRepository;
+    private SubjectRepository subjectRepository;
     private KnowledgeIngestionServiceImpl ingestionService;
 
     @BeforeEach
@@ -43,8 +45,10 @@ class KnowledgeIngestionServiceImplTest {
         EmbeddingStore<TextSegment> storeMock = Mockito.mock(EmbeddingStore.class);
         embeddingStore = storeMock;
         flashcardRepository = Mockito.mock(FlashcardRepository.class);
+        subjectRepository = Mockito.mock(SubjectRepository.class);
 
-        ingestionService = new KnowledgeIngestionServiceImpl(embeddingModel, embeddingStore, flashcardRepository);
+        ingestionService = new KnowledgeIngestionServiceImpl(
+                embeddingModel, embeddingStore, flashcardRepository, subjectRepository);
     }
 
     @Test

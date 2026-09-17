@@ -70,6 +70,12 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+  tracing:
+    sampling:
+      probability: 1.0
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 logging:
   level:
@@ -77,6 +83,10 @@ logging:
     br.edu.unipam.tcc: INFO
     org.springframework.web: WARN
     org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} %clr(%5p) [%X{traceId:-},%X{studentPhone:-},%X{action:-}] %logger{36} - %msg%n"
+  file:
+    name: logs/application.log
 
 uazapi:
   base-url: ${UAZAPI_BASE_URL:https://free.uazapi.com}

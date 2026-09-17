@@ -1,23 +1,35 @@
 package br.edu.unipam.tcc.service;
 
+import br.edu.unipam.tcc.repository.SystemConfigurationRepository;
 import br.edu.unipam.tcc.service.impl.UazapiClientServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+import java.util.Optional;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.*;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
+@ExtendWith(MockitoExtension.class)
 class UazapiClientServiceImplTest {
 
     private RestClient.Builder restClientBuilder;
     private MockRestServiceServer mockServer;
     private UazapiClientService uazapiClientService;
+
+    @Mock
+    private SystemConfigurationRepository configRepository;
 
     private static final String BASE_URL = "https://free.uazapi.com";
     private static final String API_KEY = "test-secret-key";
@@ -27,9 +39,11 @@ class UazapiClientServiceImplTest {
     void setUp() {
         restClientBuilder = RestClient.builder();
         mockServer = MockRestServiceServer.bindTo(restClientBuilder).build();
+        lenient().when(configRepository.findByConfigKey(any())).thenReturn(Optional.empty());
 
         uazapiClientService = new UazapiClientServiceImpl(
                 restClientBuilder,
+                configRepository,
                 BASE_URL,
                 API_KEY,
                 INSTANCE

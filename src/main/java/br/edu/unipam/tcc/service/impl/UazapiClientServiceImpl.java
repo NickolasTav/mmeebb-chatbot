@@ -2,6 +2,8 @@ package br.edu.unipam.tcc.service.impl;
 
 import br.edu.unipam.tcc.dto.SendMessageRequestDto;
 import br.edu.unipam.tcc.dto.SendPresenceRequestDto;
+import br.edu.unipam.tcc.entity.SystemConfiguration;
+import br.edu.unipam.tcc.repository.SystemConfigurationRepository;
 import br.edu.unipam.tcc.service.UazapiClientService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,30 +11,38 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
+
 /**
  * Implementação do cliente HTTP da Uazapi utilizando o Spring RestClient.
+ *
+ * <p>As credenciais (base URL, instância, API key) são resolvidas a cada chamada a partir de
+ * {@code system_configurations} (persistidas pelo painel {@code /setup}, incluindo instâncias
+ * provisionadas automaticamente via {@code UazapiInstanceService.provisionInstance()}), com
+ * fallback para os valores estáticos do {@code application.yml}/{@code .env}.</p>
  */
 @Slf4j
 @Service
 public class UazapiClientServiceImpl implements UazapiClientService {
 
     private final RestClient restClient;
-    private final String baseUrl;
-    private final String apiKey;
-    private final String instance;
+    private final SystemConfigurationRepository configRepository;
+    private final String defaultBaseUrl;
+    private final String defaultApiKey;
+    private final String defaultInstance;
 
     public UazapiClientServiceImpl(
             RestClient.Builder restClientBuilder,
-            @Value("${uazapi.base-url:https://free.uazapi.com}") String baseUrl,
-            @Value("${uazapi.api-key:}") String apiKey,
-            @Value("${uazapi.instance:}") String instance
+            SystemConfigurationRepository configRepository,
+            @Value("${uazapi.base-url:https://free.uazapi.com}") String defaultBaseUrl,
+            @Value("${uazapi.api-key:}") String defaultApiKey,
+            @Value("${uazapi.instance:}") String defaultInstance
     ) {
-        this.baseUrl = baseUrl != null ? baseUrl.replaceAll("/+$", "") : "https://free.uazapi.com";
-        this.apiKey = apiKey != null ? apiKey : "";
-        this.instance = instance != null ? instance : "";
-        this.restClient = restClientBuilder
-                .baseUrl(this.baseUrl)
-                .build();
+        this.configRepository = configRepository;
+        this.defaultBaseUrl = defaultBaseUrl != null ? defaultBaseUrl.replaceAll("/+$", "") : "https://free.uazapi.com";
+        this.defaultApiKey = defaultApiKey != null ? defaultApiKey : "";
+        this.defaultInstance = defaultInstance != null ? defaultInstance : "";
+        this.restClient = restClientBuilder.build();
     }
 
     @Override
@@ -42,40 +52,41 @@ public class UazapiClientServiceImpl implements UazapiClientService {
             return;
         }
 
+        UazapiCredentials creds = resolveCredentials();
         SendMessageRequestDto payload = new SendMessageRequestDto(phoneNumber.trim(), message.trim());
-        log.info("[UazapiClient] Disparando envio de texto para [{}] via Uazapi...", phoneNumber);
+        log.info("[UazapiClient] Disparando envio de texto para [{}] via Uazapi (instância [{}])...", phoneNumber, creds.instance());
 
         // 1. Rota primária nativa: POST /send/text (Padrão Uazapi / UazapiGO)
-        boolean sent = executePost("/send/text", payload, phoneNumber);
-        
+        boolean sent = executePost(creds, "/send/text", payload, phoneNumber);
+
         // 2. Fallback com instância: POST /message/sendText/{instance}
-        if (!sent && instance != null && !instance.isBlank()) {
-            log.info("[UazapiClient] Tentando fallback para /message/sendText/{}...", instance);
-            sent = executePost("/message/sendText/" + instance, payload, phoneNumber);
+        if (!sent && !creds.instance().isBlank()) {
+            log.info("[UazapiClient] Tentando fallback para /message/sendText/{}...", creds.instance());
+            sent = executePost(creds, "/message/sendText/" + creds.instance(), payload, phoneNumber);
         }
-        
+
         // 3. Fallback legado: POST /message/sendText
         if (!sent) {
             log.info("[UazapiClient] Tentando fallback para /message/sendText...");
-            executePost("/message/sendText", payload, phoneNumber);
+            executePost(creds, "/message/sendText", payload, phoneNumber);
         }
     }
 
-    private boolean executePost(String uri, Object payload, String targetPhone) {
+    private boolean executePost(UazapiCredentials creds, String path, Object payload, String targetPhone) {
         try {
             restClient.post()
-                    .uri(uri)
-                    .header("apikey", this.apiKey)
-                    .header("token", this.apiKey)
-                    .header("Authorization", "Bearer " + this.apiKey)
+                    .uri(URI.create(creds.baseUrl() + path))
+                    .header("apikey", creds.apiKey())
+                    .header("token", creds.apiKey())
+                    .header("Authorization", "Bearer " + creds.apiKey())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(payload)
                     .retrieve()
                     .toBodilessEntity();
-            log.info("[UazapiClient] Mensagem de texto enviada com sucesso via [{}] para [{}]", uri, targetPhone);
+            log.info("[UazapiClient] Mensagem de texto enviada com sucesso via [{}] para [{}]", path, targetPhone);
             return true;
         } catch (Exception e) {
-            log.warn("[UazapiClient] Falha ao enviar via rota [{}] para [{}]: {}", uri, targetPhone, e.getMessage());
+            log.warn("[UazapiClient] Falha ao enviar via rota [{}] para [{}]: {}", path, targetPhone, e.getMessage());
             return false;
         }
     }
@@ -87,14 +98,15 @@ public class UazapiClientServiceImpl implements UazapiClientService {
             return;
         }
 
+        UazapiCredentials creds = resolveCredentials();
         try {
             SendPresenceRequestDto payload = new SendPresenceRequestDto(phoneNumber.trim(), presence.trim());
             log.debug("[UazapiClient] Disparando POST /send/presence ({}) para [{}]", presence, phoneNumber);
 
             restClient.post()
-                    .uri("/send/presence")
-                    .header("apikey", this.apiKey)
-                    .header("token", this.apiKey)
+                    .uri(URI.create(creds.baseUrl() + "/send/presence"))
+                    .header("apikey", creds.apiKey())
+                    .header("token", creds.apiKey())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(payload)
                     .retrieve()
@@ -104,5 +116,25 @@ public class UazapiClientServiceImpl implements UazapiClientService {
         } catch (Exception e) {
             log.debug("[UazapiClient] Gateway não processou envio de presença ({}) para [{}]: {}", presence, phoneNumber, e.getMessage());
         }
+    }
+
+    private UazapiCredentials resolveCredentials() {
+        String baseUrl = configRepository.findByConfigKey("uazapi.base-url")
+                .map(SystemConfiguration::getConfigValue)
+                .filter(value -> !value.isBlank())
+                .orElse(defaultBaseUrl);
+        String instance = configRepository.findByConfigKey("uazapi.instance")
+                .map(SystemConfiguration::getConfigValue)
+                .filter(value -> !value.isBlank())
+                .orElse(defaultInstance);
+        String apiKey = configRepository.findByConfigKey("uazapi.api-key")
+                .map(SystemConfiguration::getConfigValue)
+                .filter(value -> !value.isBlank())
+                .orElse(defaultApiKey);
+
+        return new UazapiCredentials(baseUrl.replaceAll("/+$", ""), instance, apiKey);
+    }
+
+    private record UazapiCredentials(String baseUrl, String instance, String apiKey) {
     }
 }

@@ -7,6 +7,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.serializer.SerializationException;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -81,5 +88,22 @@ class RedisChatSessionStoreTest {
 
         store.delete(phone);
         assertTrue(store.find(phone).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Deve descartar sessão gravada com um estado que não existe mais e devolver vazio")
+    @SuppressWarnings("unchecked")
+    void shouldDiscardIncompatibleSession() {
+        String key = "mmeebb:session:5534900000009";
+        RedisTemplate<String, ChatSessionState> template = mock(RedisTemplate.class);
+        ValueOperations<String, ChatSessionState> operations = mock(ValueOperations.class);
+        when(template.opsForValue()).thenReturn(operations);
+        when(operations.get(key)).thenThrow(new SerializationException(
+                "Cannot deserialize value of type ChatState from String \"SELECTING_COURSE\""));
+
+        RedisChatSessionStore store = new RedisChatSessionStore(template, 30);
+
+        assertTrue(store.find("5534900000009").isEmpty());
+        verify(template).delete(key);
     }
 }

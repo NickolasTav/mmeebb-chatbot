@@ -3,6 +3,7 @@ package br.edu.unipam.tcc.session;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.SerializationException;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -35,7 +36,17 @@ public class RedisChatSessionStore implements ChatSessionStore {
         if (phoneNumber == null || phoneNumber.isBlank()) {
             return Optional.empty();
         }
-        return Optional.ofNullable(redisTemplate.opsForValue().get(buildKey(phoneNumber)));
+
+        String key = buildKey(phoneNumber);
+        try {
+            return Optional.ofNullable(redisTemplate.opsForValue().get(key));
+        } catch (SerializationException e) {
+            // Sessão gravada por uma versão anterior (por exemplo, com um estado da FSM que deixou
+            // de existir): descarta a chave e deixa o orquestrador reconstruir do cadastro no Postgres.
+            log.warn("[SessionStore] Sessão incompatível descartada para [{}]: {}", phoneNumber, e.getMessage());
+            redisTemplate.delete(key);
+            return Optional.empty();
+        }
     }
 
     @Override

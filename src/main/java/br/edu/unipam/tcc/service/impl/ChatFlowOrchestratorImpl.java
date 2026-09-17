@@ -1,9 +1,7 @@
 package br.edu.unipam.tcc.service.impl;
 
-import br.edu.unipam.tcc.config.RabbitMQConfig;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
-import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.Flashcard;
@@ -13,6 +11,7 @@ import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.CourseRepository;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
@@ -30,7 +29,6 @@ import br.edu.unipam.tcc.session.ChatSessionState;
 import br.edu.unipam.tcc.session.ChatSessionStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -79,7 +77,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final AnswerEvaluationService answerEvaluationService;
     private final StudentOnboardingService studentOnboardingService;
     private final MmeebbMetrics mmeebbMetrics;
-    private final RabbitTemplate rabbitTemplate;
+    private final OutgoingMessagePublisher outgoingMessagePublisher;
 
     @Override
     public void processIncomingMessage(UazapiWebhookDto webhookDto) {
@@ -621,8 +619,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     private void send(ChatSessionState session, String message) {
-        OutgoingMessageDto outgoingDto = new OutgoingMessageDto(session.getPhoneNumber(), message);
-        rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.OUTGOING_ROUTING_KEY, outgoingDto);
+        outgoingMessagePublisher.publish(session.getPhoneNumber(), message);
     }
 
     private void sendMainMenu(ChatSessionState session) {

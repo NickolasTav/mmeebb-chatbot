@@ -9,8 +9,6 @@ import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
-import br.edu.unipam.tcc.config.RabbitMQConfig;
-import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
@@ -19,6 +17,7 @@ import br.edu.unipam.tcc.repository.FlashcardRepository;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentCourseRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
+import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.ChatFlowOrchestratorImpl;
@@ -34,7 +33,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -71,7 +69,7 @@ class ChatFlowOrchestratorImplTest {
     @Mock private AnswerEvaluationService answerEvaluationService;
     @Mock private StudentOnboardingService studentOnboardingService;
     @Mock private MmeebbMetrics mmeebbMetrics;
-    @Mock private RabbitTemplate rabbitTemplate;
+    @Mock private OutgoingMessagePublisher outgoingMessagePublisher;
 
     @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
 
@@ -119,10 +117,9 @@ class ChatFlowOrchestratorImplTest {
     }
 
     private String lastSentMessage() {
-        ArgumentCaptor<OutgoingMessageDto> captor = ArgumentCaptor.forClass(OutgoingMessageDto.class);
-        verify(rabbitTemplate, org.mockito.Mockito.atLeastOnce())
-                .convertAndSend(eq(RabbitMQConfig.EXCHANGE_NAME), eq(RabbitMQConfig.OUTGOING_ROUTING_KEY), captor.capture());
-        return captor.getValue().messageText();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(outgoingMessagePublisher, org.mockito.Mockito.atLeastOnce()).publish(eq(PHONE), captor.capture());
+        return captor.getValue();
     }
 
     // =========================================================================
@@ -503,7 +500,7 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(null);
         orchestrator.processIncomingMessage(new UazapiWebhookDto(null, JID, true, "oi", null, null, "msg"));
 
-        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
+        verify(outgoingMessagePublisher, never()).publish(anyString(), anyString());
         verify(chatSessionStore, never()).save(any());
     }
 }

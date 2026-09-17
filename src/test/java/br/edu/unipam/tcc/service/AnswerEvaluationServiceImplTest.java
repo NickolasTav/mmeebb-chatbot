@@ -5,7 +5,9 @@ import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.service.impl.AnswerEvaluationServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.output.Response;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,15 +17,23 @@ import org.mockito.Mockito;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.when;
 
 class AnswerEvaluationServiceImplTest {
 
+    private ChatLanguageModel chatLanguageModel;
     private AnswerEvaluationServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new AnswerEvaluationServiceImpl(
-                Mockito.mock(ChatLanguageModel.class), new ObjectMapper());
+        chatLanguageModel = Mockito.mock(ChatLanguageModel.class);
+        service = new AnswerEvaluationServiceImpl(chatLanguageModel, new ObjectMapper());
+    }
+
+    private void stubGeminiResponse(String json) {
+        Response<AiMessage> response = Response.from(AiMessage.from(json));
+        when(chatLanguageModel.generate(anyList())).thenReturn(response);
     }
 
     private Flashcard multipleChoice(String gabarito) {
@@ -82,5 +92,58 @@ class AnswerEvaluationServiceImplTest {
     @DisplayName("Deve recusar resposta vazia sem acionar o modelo de linguagem")
     void shouldRejectBlankAnswer() {
         assertFalse(service.evaluate("   ", multipleChoice("A")).correct());
+    }
+
+    @Test
+    @DisplayName("Deve sinalizar dúvida em questão de múltipla escolha sem pontuar como errada")
+    void shouldFlagDoubtOnMultipleChoiceWithoutScoring() {
+        stubGeminiResponse("{\"correct\": false, \"feedback\": null, \"isDoubt\": true}");
+
+        AnswerEvaluationDto result = service.evaluate("não entendi, pode explicar essa questão?", multipleChoice("A"));
+
+        assertTrue(result.isDoubt());
+        assertFalse(result.correct());
+    }
+
+    @Test
+    @DisplayName("Deve sinalizar dúvida em questão discursiva sem pontuar como errada")
+    void shouldFlagDoubtOnDissertativeWithoutScoring() {
+        Flashcard card = Flashcard.builder()
+                .questionType(QuestionType.FLASHCARD)
+                .question("Defina lesão renal aguda.")
+                .answer("Aumento da creatinina sérica >= 0.3 mg/dL em 48h")
+                .build();
+        stubGeminiResponse("{\"correct\": false, \"feedback\": null, \"isDoubt\": true}");
+
+        AnswerEvaluationDto result = service.evaluate("não sei, me dá uma dica?", card);
+
+        assertTrue(result.isDoubt());
+        assertFalse(result.correct());
+    }
+
+    @Test
+    @DisplayName("Não deve acionar o modelo de linguagem quando a resposta bate no fast-path de letra")
+    void shouldNotCallLlmWhenChoiceLetterFastPathMatches() {
+        AnswerEvaluationDto result = service.evaluate("letra A", multipleChoice("A"));
+
+        assertTrue(result.correct());
+        assertFalse(result.isDoubt());
+        Mockito.verifyNoInteractions(chatLanguageModel);
+    }
+
+    @Test
+    @DisplayName("Deve manter isDoubt falso quando o Gemini classifica como tentativa de resposta")
+    void shouldKeepIsDoubtFalseWhenGeminiClassifiesAsAnswerAttempt() {
+        Flashcard card = Flashcard.builder()
+                .questionType(QuestionType.FLASHCARD)
+                .question("Defina lesão renal aguda.")
+                .answer("Aumento da creatinina sérica >= 0.3 mg/dL em 48h")
+                .build();
+        stubGeminiResponse("{\"correct\": false, \"feedback\": \"Quase lá, revise o valor de corte.\", \"isDoubt\": false}");
+
+        AnswerEvaluationDto result = service.evaluate("acho que é qualquer aumento da creatinina", card);
+
+        assertFalse(result.isDoubt());
+        assertFalse(result.correct());
     }
 }

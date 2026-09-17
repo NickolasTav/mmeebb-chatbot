@@ -55,9 +55,9 @@ O projeto fundamenta-se na convergência de três pilares científicos e comport
 
 ```mermaid
 graph LR
-    A[<b>Nelson Cowan (2001)</b><br/>Limite de Memória de Trabalho<br/>~4 chunks simultâneos] --> D[<b>Chatbot MMEEBB</b><br/>Interação em doses pílulas no WhatsApp]
-    B[<b>Hermann Ebbinghaus (1885)</b><br/>Curva do Esquecimento<br/>Perda exponencial sem reforço] --> D
-    C[<b>BJ Fogg (2009)</b><br/>Modelo Comportamental<br/>B = MAT: Gatilho Ativo sem Atrito] --> D
+    A["Nelson Cowan (2001)<br/>Limite de Memória de Trabalho<br/>~4 chunks simultâneos"] --> D["Chatbot MMEEBB<br/>Interação em doses pílulas no WhatsApp"]
+    B["Hermann Ebbinghaus (1885)<br/>Curva do Esquecimento<br/>Perda exponencial sem reforço"] --> D
+    C["BJ Fogg (2009)<br/>Modelo Comportamental<br/>B = MAT: Gatilho Ativo sem Atrito"] --> D
 ```
 
 1. **A Capacidade Mágica de Cowan (2001):** Demonstra que a atenção humana imediata comporta apenas $\approx 4$ blocos (*chunks*) de informação. O chatbot envia pílulas clínicas diárias que respeitam essa barreira cognitiva.

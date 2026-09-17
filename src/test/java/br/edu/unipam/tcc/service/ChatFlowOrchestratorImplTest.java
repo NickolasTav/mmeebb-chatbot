@@ -138,7 +138,12 @@ class ChatFlowOrchestratorImplTest {
         verify(chatSessionStore).save(captor.capture());
 
         assertEquals(ChatState.AWAITING_FULL_NAME, captor.getValue().getCurrentState());
-        assertTrue(lastSentMessage().contains("nome completo"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Seja bem-vindo ao Chatbot MMEEBB UNIPAM"));
+        assertTrue(sent.contains("Por favor"));
+        assertTrue(sent.contains("*nome completo*"));
+        assertTrue(sent.contains("Maria Silva Andrade"));
     }
 
     @Test

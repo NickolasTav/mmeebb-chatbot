@@ -178,12 +178,15 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         transitionTo(session, ChatState.AWAITING_FULL_NAME);
 
         send(session, """
-                👋 *Bem-vindo ao Chatbot MMEEBB UNIPAM!*
-                Seu assistente de repetição espaçada para os estudos.
+                👋 *Seja bem-vindo ao Chatbot MMEEBB UNIPAM!*
 
-                Como este é seu primeiro acesso, preciso de alguns dados rápidos para montar seu plano de revisões.
+                Sou seu assistente de estudos por repetição espaçada: eu lembro você de revisar na hora certa e respondo suas dúvidas de conteúdo pelo WhatsApp.
 
-                📝 *1 de 3* — Qual é o seu *nome completo*?""");
+                Como este é o seu primeiro acesso, preciso de *3 informações rápidas* para montar o seu plano de revisões.
+
+                📝 *1 de 3* — Por favor, me diga o seu *nome completo*.
+
+                _Exemplo: Maria Silva Andrade_""");
     }
 
     private void handleFullNameInput(ChatSessionState session, String rawText) {

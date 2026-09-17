@@ -163,7 +163,7 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 | :--- | :--- | :--- |
 | **📚 START_REVIEW** | `1`, ou texto livre como *"quero estudar um pouco"* | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
 | **💡 ASK_DOUBT** | `2`, ou qualquer pergunta de conteúdo | Responde via RAG. Se a mensagem citar uma disciplina (*"dúvida de cardiologia"*), a busca é particionada por `subject_id`. |
-| **🔄 CHANGE_SUBJECT** | `3`, ou *"quero trocar de matéria"* | Abre a seleção de curso e disciplina. |
+| **⚙️ OPEN_SETTINGS** | `3`, `configurações`, `config`, `ajustes`, ou *"quero mudar meu horário"* | Abre o menu de Configurações (nome de tratamento, horário do lembrete, pausar lembretes, curso e período). |
 | **📋 SHOW_MENU** | `menu`, `oi`, `bom dia`, `ajuda` | Reexibe o menu principal. |
 | **🚪 EXIT** | `sair`, `tchau`, `encerrar`, `flw`, `/sair` | Finaliza a sessão com despedida e limpa o card ativo. |
 
@@ -217,7 +217,10 @@ erDiagram
         string phone_number UK "5534999998888"
         string full_name
         string ra UK "RA Institucional"
-        time preferred_study_time
+        string preferred_name "Apelido de tratamento"
+        time preferred_study_time "Horario do lembrete diario"
+        boolean review_notifications_enabled
+        date last_review_notification_on "Dia ja avaliado pelo scheduler"
         boolean active
     }
     STUDENT_COURSE {
@@ -451,11 +454,13 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 213
+- **Total de Testes Unitários:** 342
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos e **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook).
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso) e **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook).
 
 > O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
+
+> O teste `RepetitionScheduleRepositoryTest` sobe um **Postgres real com pgvector via Testcontainers** e aplica as migrations Flyway para validar o filtro de matrícula ativa — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, ele é ignorado automaticamente.
 
 ---
 

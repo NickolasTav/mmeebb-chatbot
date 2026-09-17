@@ -16,6 +16,17 @@ import java.util.UUID;
 @Repository
 public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSchedule, Long> {
 
+    /**
+     * Restringe revisões e lembretes aos cards de cursos em que o estudante está matriculado.
+     * Trocar de curso apenas desativa a matrícula anterior, então o progresso MMEEBB do curso
+     * antigo fica guardado e volta a valer se o aluno retornar a ele.
+     */
+    String ACTIVE_ENROLLMENT_FILTER =
+            "AND EXISTS (SELECT sc.id FROM StudentCourse sc " +
+            "WHERE sc.student.id = s.student.id " +
+            "AND sc.course.id = s.flashcard.subject.course.id " +
+            "AND sc.active = true) ";
+
     Optional<RepetitionSchedule> findByStudentIdAndFlashcardId(UUID studentId, Long flashcardId);
 
     List<RepetitionSchedule> findByStudentId(UUID studentId);
@@ -36,7 +47,8 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status IN :statuses " +
-           "AND s.flashcard.active = true")
+           "AND s.flashcard.active = true " +
+           ACTIVE_ENROLLMENT_FILTER)
     long countPendingReviewsByStudent(
             @Param("studentId") UUID studentId,
             @Param("currentDate") LocalDate currentDate,
@@ -47,7 +59,8 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.flashcard.active = true " +
-           "AND s.status != 'COMPLETED'")
+           "AND s.status != 'COMPLETED' " +
+           ACTIVE_ENROLLMENT_FILTER)
     long countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(
             @Param("studentId") UUID studentId,
             @Param("currentDate") LocalDate currentDate
@@ -59,6 +72,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status = :status " +
+           ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")
     List<RepetitionSchedule> findPendingReviewsByStudent(
             @Param("studentId") UUID studentId,
@@ -73,6 +87,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "AND sub.id = :subjectId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status = :status " +
+           ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")
     List<RepetitionSchedule> findPendingReviewsByStudentAndSubject(
             @Param("studentId") UUID studentId,

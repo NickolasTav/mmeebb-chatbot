@@ -18,7 +18,7 @@
 		<java.version>17</java.version>
 		<langchain4j.version>0.35.0</langchain4j.version>
 		<pgvector.version>0.1.6</pgvector.version>
-		<testcontainers.version>1.20.1</testcontainers.version>
+		<testcontainers.version>1.21.3</testcontainers.version>
 	</properties>
 
 	<dependencies>
@@ -177,6 +177,13 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.2.5</version>
+				<configuration>
+					<systemPropertyVariables>
+						<!-- Docker Engine 29+ exige API >= 1.44 e recusa a versão que o docker-java
+						     negocia por padrão, o que faria os testes com Testcontainers serem pulados. -->
+						<api.version>1.44</api.version>
+					</systemPropertyVariables>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

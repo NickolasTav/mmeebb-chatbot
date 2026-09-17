@@ -11,6 +11,7 @@ import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.CourseRepository;
@@ -31,11 +32,18 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+
+import static br.edu.unipam.tcc.util.ChatInputUtils.MAX_ACADEMIC_PERIOD;
+import static br.edu.unipam.tcc.util.ChatInputUtils.numberedList;
+import static br.edu.unipam.tcc.util.ChatInputUtils.parsePositiveInt;
+import static br.edu.unipam.tcc.util.ChatInputUtils.parseSelection;
 
 /**
  * Orquestrador do fluxo conversacional do Chatbot MMEEBB.
@@ -62,7 +70,10 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             "pular", "nao tenho", "não tenho", "nao sei", "não sei", "-", "skip"
     );
 
-    private static final int MAX_ACADEMIC_PERIOD = 20;
+    private static final Set<String> SETTINGS_COMMANDS = Set.of(
+            "configurações", "configuracoes", "configuração", "configuracao",
+            "config", "ajustes", "preferências", "preferencias", "/config"
+    );
 
     private final ChatSessionStore chatSessionStore;
     private final StudentRepository studentRepository;
@@ -77,6 +88,8 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final AnswerEvaluationService answerEvaluationService;
     private final StudentOnboardingService studentOnboardingService;
     private final MmeebbMetrics mmeebbMetrics;
+    private final StudentSettingsFlowHandler studentSettingsFlowHandler;
+    private final Clock clock;
     private final OutgoingMessagePublisher outgoingMessagePublisher;
 
     @Override
@@ -115,6 +128,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 handleGlobalReset(session);
                 return;
             }
+            if (SETTINGS_COMMANDS.contains(lowerText)) {
+                session.clearReviewContext();
+                studentSettingsFlowHandler.open(session);
+                return;
+            }
         }
 
         switch (session.getCurrentState()) {
@@ -126,8 +144,9 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             case MAIN_MENU -> handleMainMenuState(session, rawText);
             case REVIEW_MODE -> handleReviewModeState(session, rawText);
             case RAG_DOUBT_MODE -> handleRagDoubtModeState(session, rawText);
-            case SELECTING_COURSE -> handleSelectingCourseState(session, rawText);
-            case SELECTING_SUBJECT -> handleSelectingSubjectState(session, rawText);
+            case SETTINGS_MENU, SETTINGS_AWAITING_NAME, SETTINGS_AWAITING_TIME,
+                 SETTINGS_AWAITING_COURSE, SETTINGS_AWAITING_PERIOD ->
+                    studentSettingsFlowHandler.handle(session, rawText);
         }
     }
 
@@ -291,10 +310,15 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 Preparei *%d* questão(ões) para sua primeira rodada de revisões.
 
+                ⏰ Seu lembrete diário chega às *%s*. Para mudar o horário ou como eu chamo você, envie *configurações*.
+
                 %s
 
                 💬 _Você também pode escrever livremente: pergunte qualquer dúvida de conteúdo que eu consulto o acervo da sua disciplina._""",
-                firstName(student.getFullName()), pending, menuBody()));
+                student.displayName(),
+                pending,
+                student.getPreferredStudyTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+                menuBody()));
     }
 
     // =========================================================================
@@ -315,7 +339,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             }
             case "3" -> {
                 mmeebbMetrics.recordAiInteraction("intent_router", "fast_path");
-                startCourseSelection(session);
+                studentSettingsFlowHandler.open(session);
                 return;
             }
             default -> { /* texto livre: segue para a classificação de intenção */ }
@@ -326,7 +350,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
         switch (intent.intent()) {
             case START_REVIEW -> startReviewMode(session);
-            case CHANGE_SUBJECT -> startCourseSelection(session);
+            case OPEN_SETTINGS -> studentSettingsFlowHandler.open(session);
             case SHOW_MENU -> sendMainMenu(session);
             case EXIT -> handleExitCommand(session);
             case ASK_DOUBT -> {
@@ -417,9 +441,9 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
         RepetitionSchedule schedule = repetitionScheduleRepository
                 .findByStudentIdAndFlashcardId(student.getId(), card.getId())
-                .orElseGet(() -> mmeebbService.initializeSchedule(student, card, LocalDate.now()));
+                .orElseGet(() -> mmeebbService.initializeSchedule(student, card, LocalDate.now(clock)));
 
-        RepetitionSchedule updated = mmeebbService.processAnswer(schedule, evaluation.correct(), LocalDateTime.now());
+        RepetitionSchedule updated = mmeebbService.processAnswer(schedule, evaluation.correct(), LocalDateTime.now(clock));
         repetitionScheduleRepository.save(updated);
 
         StringBuilder feedback = new StringBuilder();
@@ -490,12 +514,12 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
     private List<RepetitionSchedule> findPendingReviews(java.util.UUID studentId) {
         return repetitionScheduleRepository.findPendingReviewsByStudent(
-                studentId, LocalDate.now(), ScheduleStatus.PENDING);
+                studentId, LocalDate.now(clock), ScheduleStatus.PENDING);
     }
 
     private long countPendingReviews(java.util.UUID studentId) {
         return repetitionScheduleRepository
-                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(studentId, LocalDate.now());
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(studentId, LocalDate.now(clock));
     }
 
     // =========================================================================
@@ -524,70 +548,6 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 ------------------------------------
                 _Envie outra dúvida ou digite *menu* para voltar._""", header, answer));
-    }
-
-    // =========================================================================
-    // Troca de curso / disciplina
-    // =========================================================================
-
-    private void startCourseSelection(ChatSessionState session) {
-        List<Course> courses = courseRepository.findByActiveTrue();
-        if (courses.isEmpty()) {
-            send(session, "⚠️ Não há cursos cadastrados no momento.\n\nDigite *menu* para voltar.");
-            return;
-        }
-
-        transitionTo(session, ChatState.SELECTING_COURSE);
-        send(session, "🎓 *Selecione o curso:*\n\n"
-                + numberedList(courses.stream().map(Course::getName).toList())
-                + "\n_Ou digite *menu* para cancelar._");
-    }
-
-    private void handleSelectingCourseState(ChatSessionState session, String rawText) {
-        List<Course> courses = courseRepository.findByActiveTrue();
-
-        Optional<Course> chosen = parseSelection(rawText, courses);
-        if (chosen.isEmpty()) {
-            send(session, "⚠️ Número de curso inválido. Escolha um da lista ou digite *menu* para voltar.");
-            return;
-        }
-
-        session.setSelectedCourseId(chosen.get().getId());
-        session.setSelectedSubjectId(null);
-
-        List<Subject> subjects = subjectRepository.findByCourseIdAndActiveTrue(chosen.get().getId());
-        if (subjects.isEmpty()) {
-            transitionTo(session, ChatState.MAIN_MENU);
-            send(session, "✅ Curso *" + chosen.get().getName()
-                    + "* selecionado.\n_(Nenhuma disciplina vinculada encontrada.)_\n\n" + menuBody());
-            return;
-        }
-
-        transitionTo(session, ChatState.SELECTING_SUBJECT);
-        send(session, "📖 *Selecione a disciplina de " + chosen.get().getName() + ":*\n\n"
-                + numberedList(subjects.stream().map(Subject::getName).toList())
-                + "\n_Ou digite *menu* para cancelar._");
-    }
-
-    private void handleSelectingSubjectState(ChatSessionState session, String rawText) {
-        if (session.getSelectedCourseId() == null) {
-            transitionTo(session, ChatState.MAIN_MENU);
-            sendMainMenu(session);
-            return;
-        }
-
-        List<Subject> subjects = subjectRepository.findByCourseIdAndActiveTrue(session.getSelectedCourseId());
-
-        Optional<Subject> chosen = parseSelection(rawText, subjects);
-        if (chosen.isEmpty()) {
-            send(session, "⚠️ Número de disciplina inválido. Escolha um da lista ou digite *menu* para voltar.");
-            return;
-        }
-
-        session.setSelectedSubjectId(chosen.get().getId());
-        transitionTo(session, ChatState.MAIN_MENU);
-
-        send(session, "✅ Disciplina *" + chosen.get().getName() + "* selecionada!\n\n" + menuBody());
     }
 
     // =========================================================================
@@ -635,7 +595,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 *1* - 📚 Revisar (método MMEEBB)
                 *2* - 💡 Tirar uma dúvida
-                *3* - 🔄 Trocar curso/disciplina
+                *3* - ⚙️ Configurações _(nome, horário do lembrete, curso)_
 
                 _Digite o número, escreva o que precisa ou envie *sair* para encerrar._""";
     }
@@ -652,34 +612,6 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
         sb.append("_Envie sua resposta ou digite *menu* para pausar._");
         return sb.toString();
-    }
-
-    private String numberedList(List<String> labels) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < labels.size(); i++) {
-            sb.append("*").append(i + 1).append("* - ").append(labels.get(i)).append("\n");
-        }
-        return sb.toString();
-    }
-
-    private <T> Optional<T> parseSelection(String input, List<T> options) {
-        Integer index = parsePositiveInt(input);
-        if (index == null || index > options.size()) {
-            return Optional.empty();
-        }
-        return Optional.of(options.get(index - 1));
-    }
-
-    private Integer parsePositiveInt(String input) {
-        if (input == null) {
-            return null;
-        }
-        try {
-            int value = Integer.parseInt(input.trim());
-            return value >= 1 ? value : null;
-        } catch (NumberFormatException e) {
-            return null;
-        }
     }
 
     private String firstName(String fullName) {

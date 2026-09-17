@@ -12,6 +12,7 @@ import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.repository.CourseRepository;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
@@ -27,19 +28,27 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -69,6 +78,9 @@ class ChatFlowOrchestratorImplTest {
     @Mock private AnswerEvaluationService answerEvaluationService;
     @Mock private StudentOnboardingService studentOnboardingService;
     @Mock private MmeebbMetrics mmeebbMetrics;
+    @Mock private StudentSettingsFlowHandler studentSettingsFlowHandler;
+    // 02:30 UTC do dia 18 equivale a 23:30 do dia 17 em Brasília: prova que a data vem do fuso de São Paulo.
+    @Spy private Clock clock = Clock.fixed(Instant.parse("2026-09-18T02:30:00Z"), ZoneId.of("America/Sao_Paulo"));
     @Mock private OutgoingMessagePublisher outgoingMessagePublisher;
 
     @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
@@ -223,8 +235,10 @@ class ChatFlowOrchestratorImplTest {
         assertEquals(student.getId(), session.getStudentId());
 
         String sent = lastSentMessage();
-        assertTrue(sent.contains("Cadastro concluído"));
+        assertTrue(sent.contains("Cadastro concluído, Maria"));
         assertTrue(sent.contains("12"));
+        assertTrue(sent.contains("*08:00*"));
+        assertTrue(sent.contains("*configurações*"));
     }
 
     @Test
@@ -256,7 +270,9 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("bom dia"));
 
         verify(studentOnboardingService, never()).register(anyString(), anyString(), anyString(), any(), any());
-        assertTrue(lastSentMessage().contains("Menu Principal"));
+        String menu = lastSentMessage();
+        assertTrue(menu.contains("Menu Principal"));
+        assertTrue(menu.contains("Configurações"));
     }
 
     // =========================================================================
@@ -507,5 +523,103 @@ class ChatFlowOrchestratorImplTest {
 
         verify(outgoingMessagePublisher, never()).publish(anyString(), anyString());
         verify(chatSessionStore, never()).save(any());
+    }
+
+    // =========================================================================
+    // Configurações
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve abrir Configurações pela opção 3 do menu sem classificar intenção")
+    void shouldOpenSettingsFromMenuOptionThree() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("3"));
+
+        verify(studentSettingsFlowHandler).open(session);
+        verify(intentRouterService, never()).classify(anyString());
+    }
+
+    @ParameterizedTest(name = "palavra-chave \"{0}\"")
+    @DisplayName("Deve abrir Configurações por palavra-chave global mesmo durante uma revisão")
+    @ValueSource(strings = {"configurações", "Configuracoes", "config", "AJUSTES", "preferências", "/config"})
+    void shouldOpenSettingsFromGlobalKeyword(String keyword) {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message(keyword));
+
+        verify(studentSettingsFlowHandler).open(session);
+        assertNull(session.getCurrentFlashcardId());
+        verify(answerEvaluationService, never()).evaluate(anyString(), any());
+    }
+
+    @ParameterizedTest(name = "estado {0}")
+    @DisplayName("Deve delegar os estados de Configurações ao handler")
+    @EnumSource(value = ChatState.class, mode = EnumSource.Mode.MATCH_ALL, names = "SETTINGS_.*")
+    void shouldDelegateSettingsStatesToHandler(ChatState state) {
+        ChatSessionState session = registeredSession(state);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("12:15"));
+
+        verify(studentSettingsFlowHandler).handle(session, "12:15");
+    }
+
+    @Test
+    @DisplayName("'menu' durante uma edição deve cancelar sem passar pelo handler")
+    void shouldCancelSettingsEditWithMenuCommand() {
+        ChatSessionState session = registeredSession(ChatState.SETTINGS_AWAITING_TIME);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("menu"));
+
+        verify(studentSettingsFlowHandler, never()).handle(any(), anyString());
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("Menu Principal"));
+    }
+
+    @Test
+    @DisplayName("Deve abrir Configurações quando a intenção classificada for OPEN_SETTINGS")
+    void shouldOpenSettingsFromIntent() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(intentRouterService.classify("quero mudar o horário do lembrete"))
+                .thenReturn(IntentResultDto.of(ChatIntent.OPEN_SETTINGS));
+
+        orchestrator.processIncomingMessage(message("quero mudar o horário do lembrete"));
+
+        verify(studentSettingsFlowHandler).open(session);
+    }
+
+    @Test
+    @DisplayName("Não deve abrir Configurações antes de concluir o cadastro")
+    void shouldNotOpenSettingsBeforeRegistration() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_FULL_NAME)
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("config"));
+
+        verify(studentSettingsFlowHandler, never()).open(any());
+        assertEquals(ChatState.AWAITING_FULL_NAME, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Deve buscar pendências pela data de São Paulo, não pelo fuso da JVM")
+    void shouldQueryPendingReviewsUsingSaoPauloDate() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(any(), any(), any())).thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        verify(repetitionScheduleRepository).findPendingReviewsByStudent(
+                student.getId(), LocalDate.of(2026, 9, 17), ScheduleStatus.PENDING);
     }
 }

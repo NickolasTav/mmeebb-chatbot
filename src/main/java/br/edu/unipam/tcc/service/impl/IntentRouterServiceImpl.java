@@ -30,7 +30,7 @@ public class IntentRouterServiceImpl implements IntentRouterService {
 
             - START_REVIEW: quer estudar, revisar, praticar, responder questões ou flashcards pendentes.
             - ASK_DOUBT: fez uma pergunta de conteúdo acadêmico/clínico, ou pediu explicação sobre um tema.
-            - CHANGE_SUBJECT: quer trocar, escolher ou mudar o curso ou a disciplina em foco.
+            - OPEN_SETTINGS: quer ver ou mudar configurações pessoais: como é chamado, horário do lembrete, pausar ou ativar lembretes, trocar de curso ou de período.
             - SHOW_MENU: cumprimentou, pediu ajuda, pediu o menu ou perguntou como o sistema funciona.
             - EXIT: quer encerrar, sair ou se despedir.
 

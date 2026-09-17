@@ -29,16 +29,24 @@ import java.util.regex.Pattern;
 public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
 
     private static final String SYSTEM_PROMPT = """
-            Você é um preceptor acadêmico corrigindo a resposta de um estudante em uma revisão de flashcard.
+            Você é um preceptor acadêmico avaliando a interação de um estudante em uma revisão de flashcard.
 
-            Considere a resposta CORRETA quando ela expressa o mesmo conceito do gabarito, ainda que com
-            outras palavras, sinônimos, abreviações clínicas usuais ou menos detalhes. Considere INCORRETA
-            quando contradiz o gabarito, cita outro conceito ou é vaga a ponto de não demonstrar domínio.
+            Primeiro decida se a mensagem do estudante é:
+            (a) uma TENTATIVA DE RESPOSTA à pergunta, mesmo que incompleta, vaga ou com outras palavras; ou
+            (b) um PEDIDO DE AJUDA/DÚVIDA sobre a questão (ex.: "não entendi", "pode explicar?", "por que não
+            é a B?", "não sei", "me dá uma dica").
 
-            Responda SOMENTE com um objeto JSON válido, sem markdown, no formato:
-            {"correct": true|false, "feedback": "<comentário de no máximo 200 caracteres>"}
+            Se for pedido de ajuda/dúvida, responda exatamente:
+            {"correct": false, "feedback": null, "isDoubt": true}
 
-            O feedback deve ser direto e pedagógico, em português do Brasil, dirigido ao estudante.""";
+            Se for tentativa de resposta, avalie comparando com o gabarito. Considere CORRETA quando ela
+            expressa o mesmo conceito do gabarito, ainda que com outras palavras, sinônimos, abreviações
+            clínicas usuais ou menos detalhes. Considere INCORRETA quando contradiz o gabarito, cita outro
+            conceito ou é vaga a ponto de não demonstrar domínio. Responda:
+            {"correct": true|false, "feedback": "<comentário de no máximo 200 caracteres>", "isDoubt": false}
+
+            Responda SOMENTE com um objeto JSON válido, sem markdown, em um dos dois formatos acima. O
+            feedback deve ser direto e pedagógico, em português do Brasil, dirigido ao estudante.""";
 
     private static final Pattern CHOICE_LETTER =
             Pattern.compile("^(?:letra|opcao|alternativa)?\\s*([a-z])(?:\\s|$)");
@@ -67,11 +75,24 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
             return AnswerEvaluationDto.accepted();
         }
 
-        if (flashcard.getQuestionType() == QuestionType.MULTIPLE_CHOICE) {
-            return new AnswerEvaluationDto(matchesChoiceLetter(student, expected), null);
+        if (flashcard.getQuestionType() == QuestionType.MULTIPLE_CHOICE && isChoiceLetterFastPath(student, expected)) {
+            return new AnswerEvaluationDto(matchesChoiceLetter(student, expected), null, false);
         }
 
         return evaluateSemantically(student, expected, flashcard);
+    }
+
+    /**
+     * Fast-path determinístico: só resolve localmente quando o gabarito é uma letra única
+     * e o estudante respondeu com o padrão esperado (letra solta, "letra A", alternativa colada).
+     * Qualquer outro texto (incluindo pedidos de ajuda) segue para a avaliação via Gemini.
+     */
+    private boolean isChoiceLetterFastPath(String student, String expected) {
+        String expectedLetter = normalize(expected);
+        if (expectedLetter.length() != 1) {
+            return true;
+        }
+        return CHOICE_LETTER.matcher(normalize(student)).find();
     }
 
     private AnswerEvaluationDto evaluateSemantically(String student, String expected, Flashcard flashcard) {
@@ -95,12 +116,19 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
                     .trim();
 
             JsonNode node = objectMapper.readTree(cleaned);
+            boolean isDoubt = node.path("isDoubt").asBoolean(false);
+            if (isDoubt) {
+                log.info("[AnswerEvaluation] Flashcard {}: estudante pediu ajuda/explicação em vez de responder",
+                        flashcard.getId());
+                return AnswerEvaluationDto.doubt();
+            }
+
             boolean correct = node.path("correct").asBoolean(false);
             String feedback = node.path("feedback").asText("").isBlank() ? null : node.path("feedback").asText().trim();
 
             log.info("[AnswerEvaluation] Flashcard {} avaliado semanticamente: {}",
                     flashcard.getId(), correct ? "CORRETO" : "INCORRETO");
-            return new AnswerEvaluationDto(correct, feedback);
+            return new AnswerEvaluationDto(correct, feedback, false);
 
         } catch (Exception e) {
             log.error("[AnswerEvaluation] Falha na correção semântica do flashcard {}: {}",

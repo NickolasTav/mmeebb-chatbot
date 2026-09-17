@@ -402,6 +402,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         Flashcard card = current.get();
         AnswerEvaluationDto evaluation = answerEvaluationService.evaluate(studentAnswer, card);
 
+        if (evaluation.isDoubt()) {
+            handleReviewDoubt(session, card, studentAnswer);
+            return;
+        }
+
         RepetitionSchedule schedule = repetitionScheduleRepository
                 .findByStudentIdAndFlashcardId(student.getId(), card.getId())
                 .orElseGet(() -> mmeebbService.initializeSchedule(student, card, LocalDate.now()));
@@ -444,6 +449,35 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         }
 
         send(session, feedback.toString());
+    }
+
+    /**
+     * O estudante pediu ajuda sobre a questão ativa em vez de tentar respondê-la. Consulta o RAG
+     * com o contexto da pergunta, escopado pela disciplina do próprio flashcard (conhecida com
+     * certeza, ao contrário do modo de dúvidas livre do menu principal), e reenvia a mesma questão
+     * sem tocar no agendamento MMEEBB.
+     */
+    private void handleReviewDoubt(ChatSessionState session, Flashcard card, String doubtText) {
+        log.info("[Orchestrator] Dúvida em revisão de [{}] sobre o flashcard {}: \"{}\"",
+                session.getPhoneNumber(), card.getId(), doubtText);
+
+        Long subjectId = flashcardRepository.findSubjectIdById(card.getId()).orElse(null);
+        String contextualQuestion = String.format(
+                "Contexto da questão em revisão: %s%nDúvida do estudante sobre essa questão: %s",
+                card.getQuestion(), doubtText);
+
+        String ragAnswer = subjectRagService.answerDoubt(contextualQuestion, subjectId);
+
+        send(session, String.format("""
+                🧠 *Tirando sua dúvida sobre esta questão*
+
+                %s
+
+                ------------------------------------
+
+                Quando estiver pronto, responda a questão abaixo novamente:
+
+                %s""", ragAnswer, formatFlashcard(card)));
     }
 
     private List<RepetitionSchedule> findPendingReviews(java.util.UUID studentId) {

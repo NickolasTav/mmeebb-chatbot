@@ -7,7 +7,7 @@
 [![Spring Boot 3](https://img.shields.io/badge/Spring%20Boot-3.3.x-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![PostgreSQL & pgvector](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3%20Management-FF6600?style=for-the-badge&logo=rabbitmq&logoColor=white)](https://www.rabbitmq.com/)
-[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-1.5%20Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.5%20Flash--Lite%20%2B%20Failover-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![LangChain4j](https://img.shields.io/badge/LangChain4j-0.35.0-1C3C3C?style=for-the-badge)](https://github.com/langchain4j/langchain4j)
 [![Tests](https://img.shields.io/badge/Tests-100%25%20Passing-brightgreen?style=for-the-badge&logo=junit5&logoColor=white)](https://junit.org/junit5/)
 
@@ -131,7 +131,7 @@ flowchart TB
         PG[(PostgreSQL 16 Relacional)]
         VEC[(pgvector Embeddings 768d)]
         FLY[Flyway Migrations]
-        GEMINI[Google Gemini 1.5 Flash]
+        GEMINI[Google Gemini 3.5 Flash-Lite<br/>+ Failover 3.5 Flash]
     end
 
     ORCH <--> PG
@@ -171,7 +171,15 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 
 #### Correção das respostas
 
-Múltipla escolha é resolvida por comparação direta; respostas dissertativas passam por **correção semântica via Gemini**, que aceita o conceito correto expresso com palavras próprias e devolve um comentário pedagógico curto.
+Múltipla escolha é resolvida por comparação direta e também aceita a letra da alternativa colada por extenso pelo aluno (`"A) Inibidor de SGLT2..."`); respostas dissertativas passam por **correção semântica via Gemini**, que aceita o conceito correto expresso com palavras próprias e devolve um comentário pedagógico curto.
+
+### 4.2. Resiliência do Gemini (Retry & Failover Automático)
+
+O LangChain4j 0.35.0 usa por padrão um timeout rígido de 10s no `OkHttpClient` do cliente Gemini, insuficiente para respostas de RAG mais elaboradas. O `GeminiServiceCustomizer` (`dev.langchain4j.model.googleai`) substitui o `OkHttpClient` interno via reflection e adiciona:
+
+- **Timeouts estendidos:** `connect`/`read`/`write`/`call` de 60s (`DEFAULT_TIMEOUT` em `LangChain4jConfig`), eliminando `SocketTimeoutException` em respostas mais longas do Tutor Clínico.
+- **Interceptor de alta demanda (`HighDemandRetryInterceptor`):** intercepta HTTP `503` (High Demand) e `429` (Rate Limit) do Google, retentando até 3 vezes com backoff progressivo (800ms, 1600ms).
+- **Failover dinâmico de modelo:** na penúltima tentativa, reescreve a URL da chamada Retrofit trocando `gemini-3.5-flash-lite` ↔ `gemini-3.5-flash` (clusters/pools separados no Google), aumentando a chance de sucesso sem intervenção manual.
 
 ---
 
@@ -274,7 +282,7 @@ erDiagram
 | **Migrations** | Flyway | Versionamento e automação do schema SQL |
 | **Mensageria** | RabbitMQ 3 Management | Desacoplamento assíncrono, buffers e proteção anti-ban |
 | **Estado Conversacional** | Redis 7 | FSM do chatbot com TTL, sem escrita relacional por mensagem |
-| **IA / LLM & RAG** | Google Gemini 1.5 Flash + LangChain4j | Preceptor clínico, classificação semântica e RAG |
+| **IA / LLM & RAG** | Google Gemini 3.5 Flash-Lite (fallback 3.5 Flash) + LangChain4j 0.35.0 | Preceptor clínico, roteamento de intenção e RAG, com interceptor de retry/failover automático em 503/429 |
 | **Parser Universal** | Apache Tika | Extração de texto de PDFs, DOCX e Markdown para ingestão |
 | **Gateway WhatsApp** | Uazapi / UazapiGO | Conexão com o WhatsApp, webhooks e envio de mensagens |
 | **Túnel Local** | Ngrok | Exposição segura da porta `8080` para recepção de eventos |
@@ -305,8 +313,9 @@ Preencha suas chaves no `.env`:
 ```properties
 # Google Gemini (Chave gratuita em: https://aistudio.google.com/app/apikey)
 GEMINI_API_KEY=sua_chave_gemini_aqui
-GEMINI_MODEL_NAME=gemini-3.5-flash
+GEMINI_MODEL_NAME=gemini-3.5-flash-lite
 GEMINI_EMBEDDING_MODEL_NAME=gemini-embedding-001
+GEMINI_TEMPERATURE=0.2
 
 # Chave de Administração REST
 ADMIN_API_KEY=teste
@@ -374,6 +383,8 @@ No painel da Uazapi, configure:
 | `SPRING_DATASOURCE_PASSWORD` | `postgres` | Senha do banco de dados |
 | `SPRING_RABBITMQ_HOST` | `localhost` | Host do RabbitMQ |
 | `SPRING_RABBITMQ_PORT` | `5672` | Porta AMQP do RabbitMQ |
+| `SPRING_RABBITMQ_USERNAME` | `guest` | Usuário do RabbitMQ |
+| `SPRING_RABBITMQ_PASSWORD` | `guest` | Senha do RabbitMQ |
 | `SPRING_REDIS_HOST` | `localhost` | Host do Redis (estado conversacional) |
 | `SPRING_REDIS_PORT` | `6379` | Porta do Redis |
 | `SPRING_REDIS_PASSWORD` | *(Vazio)* | Senha do Redis, se houver |
@@ -384,7 +395,9 @@ No painel da Uazapi, configure:
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
 | `UAZAPI_TYPING_DELAY_MS` | `2000` | Delay simulado de digitação (*composing*) |
 | `GEMINI_API_KEY` | *(Vazio)* | Chave de API do Google AI Studio (Gemini) |
-| `GEMINI_MODEL_NAME` | `gemini-1.5-flash` | Modelo de IA para RAG e Tutor Clínico (mais econômico) |
+| `GEMINI_MODEL_NAME` | `gemini-3.5-flash-lite` | Modelo de chat principal (failover automático para `gemini-3.5-flash` em picos de demanda) |
+| `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | Modelo de embeddings do RAG (768 dimensões) |
+| `GEMINI_TEMPERATURE` | `0.2` | Temperatura do modelo de chat (baixa, para respostas clínicas objetivas) |
 | `ADMIN_API_KEY` | `teste` | Chave de segurança para endpoints `/api/admin/**` |
 
 ---
@@ -407,9 +420,9 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 171
-- **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 0 Ignorados)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas, Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG, Consumidores RabbitMQ, Notificações Ativas Push e Controladores Administrativos.
+- **Total de Testes Unitários:** 202
+- **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push e Controladores Administrativos.
 
 > O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
 
@@ -420,17 +433,22 @@ Para executar a suíte completa de testes:
 ```text
 c:\projeto-tcc
 ├── src/main/java/br/edu/unipam/tcc/
-│   ├── config/          # Beans Spring (RabbitMQ, LangChain4j, etc.)
+│   ├── config/          # Beans Spring (RabbitMQ, LangChain4j, Redis, etc.)
 │   ├── consumer/        # Consumidores AMQP (@RabbitListener)
 │   ├── controller/      # Endpoints REST e Webhooks (/webhook/uazapi)
 │   ├── dto/             # DTOs de transporte de dados e mapeamento Uazapi
 │   ├── entity/          # Entidades relacionais JPA (Course, Student, etc.)
+│   │   └── enums/       # ChatIntent, ChatState
+│   ├── exception/       # GlobalExceptionHandler e exceções de domínio
 │   ├── repository/      # Repositórios Spring Data JPA
 │   ├── scheduler/       # Rotinas de disparo diário de revisões (@Scheduled)
+│   ├── session/         # FSM conversacional no Redis (ChatSessionStore, ChatSessionState)
 │   └── service/         # Interfaces e Implementações de regras de negócio
-│       ├── impl/        # ChatFlowOrchestrator, MmeebbService, SubjectRagService...
+│       └── impl/        # ChatFlowOrchestrator, MmeebbService, SubjectRagService, IntentRouterService...
+├── src/main/java/dev/langchain4j/model/googleai/
+│   └── GeminiServiceCustomizer.java  # Timeout estendido + retry/failover 503/429 no cliente Gemini
 ├── src/main/resources/
-│   ├── db/migration/    # Scripts SQL Flyway (V1__init_schema.sql)
+│   ├── db/migration/    # Scripts SQL Flyway (V1__init_schema.sql em diante)
 │   └── application.yml  # Configurações do Spring Boot
 ├── docs/                # Especificações técnicas e manuais operacionais
 │   ├── uazapi/          # Referência completa da API Uazapi

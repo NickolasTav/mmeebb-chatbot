@@ -5,6 +5,7 @@ import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.UUID;
@@ -36,9 +37,19 @@ public class Student {
     @Column(nullable = false)
     private Boolean active = true;
 
+    @Column(name = "preferred_name", length = 30)
+    private String preferredName;
+
     @Builder.Default
-    @Column(name = "preferred_study_time")
+    @Column(name = "preferred_study_time", nullable = false)
     private LocalTime preferredStudyTime = LocalTime.of(8, 0);
+
+    @Builder.Default
+    @Column(name = "review_notifications_enabled", nullable = false)
+    private Boolean reviewNotificationsEnabled = true;
+
+    @Column(name = "last_review_notification_on")
+    private LocalDate lastReviewNotificationOn;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -47,4 +58,18 @@ public class Student {
     @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    /**
+     * Nome usado nas mensagens do bot: o apelido escolhido nas Configurações, senão o
+     * primeiro nome do cadastro. O nome completo fica reservado à identificação acadêmica.
+     */
+    public String displayName() {
+        if (preferredName != null && !preferredName.isBlank()) {
+            return preferredName.trim();
+        }
+        if (fullName != null && !fullName.isBlank()) {
+            return fullName.trim().split("\\s+")[0];
+        }
+        return "Estudante";
+    }
 }

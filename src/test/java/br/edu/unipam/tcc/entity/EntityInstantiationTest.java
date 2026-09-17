@@ -101,6 +101,38 @@ class EntityInstantiationTest {
     }
 
     @Test
+    @DisplayName("Deve usar o apelido como nome de exibição quando informado")
+    void deveUsarApelidoComoNomeDeExibicao() {
+        Student student = Student.builder().fullName("Maria Silva Andrade").preferredName("Mari").build();
+
+        assertEquals("Mari", student.displayName());
+    }
+
+    @Test
+    @DisplayName("Deve usar o primeiro nome quando não houver apelido")
+    void deveUsarPrimeiroNomeQuandoNaoHouverApelido() {
+        Student student = Student.builder().fullName("  Maria   Silva Andrade ").preferredName("  ").build();
+
+        assertEquals("Maria", student.displayName());
+    }
+
+    @Test
+    @DisplayName("Deve usar 'Estudante' quando não houver nome nem apelido")
+    void deveUsarNomeGenericoQuandoNaoHouverNome() {
+        assertEquals("Estudante", Student.builder().build().displayName());
+    }
+
+    @Test
+    @DisplayName("Deve criar estudante com lembretes ativos às 08:00 e sem avaliação registrada")
+    void deveCriarStudentComPreferenciasPadraoDeLembrete() {
+        Student student = Student.builder().fullName("Maria Silva").build();
+
+        assertEquals(LocalTime.of(8, 0), student.getPreferredStudyTime());
+        assertEquals(Boolean.TRUE, student.getReviewNotificationsEnabled());
+        assertNull(student.getLastReviewNotificationOn());
+    }
+
+    @Test
     @DisplayName("Deve instanciar ChatSessionState com estado inicial NEW e sem cadastro")
     void deveInstanciarChatSessionStateCorretamente() {
         ChatSessionState session = ChatSessionState.builder()

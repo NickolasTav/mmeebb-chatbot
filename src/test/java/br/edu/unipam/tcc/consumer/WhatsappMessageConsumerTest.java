@@ -2,6 +2,7 @@ package br.edu.unipam.tcc.consumer;
 
 import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.ChatFlowOrchestrator;
 import br.edu.unipam.tcc.service.UazapiClientService;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,12 +25,15 @@ class WhatsappMessageConsumerTest {
     @Mock
     private ChatFlowOrchestrator chatFlowOrchestrator;
 
+    @Mock
+    private MmeebbMetrics mmeebbMetrics;
+
     private WhatsappMessageConsumer consumer;
 
     @BeforeEach
     void setUp() {
         // Em ambiente de teste, typingDelayMs padrão é zero para execução instantânea
-        consumer = new WhatsappMessageConsumer(uazapiClientService, chatFlowOrchestrator, 0L);
+        consumer = new WhatsappMessageConsumer(uazapiClientService, chatFlowOrchestrator, mmeebbMetrics, 0L);
     }
 
     @Test

@@ -3,6 +3,7 @@ package br.edu.unipam.tcc.service.impl;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.AnswerEvaluationService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -53,10 +54,12 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
 
     private final ChatLanguageModel chatLanguageModel;
     private final ObjectMapper objectMapper;
+    private final MmeebbMetrics mmeebbMetrics;
 
-    public AnswerEvaluationServiceImpl(ChatLanguageModel chatLanguageModel, ObjectMapper objectMapper) {
+    public AnswerEvaluationServiceImpl(ChatLanguageModel chatLanguageModel, ObjectMapper objectMapper, MmeebbMetrics mmeebbMetrics) {
         this.chatLanguageModel = chatLanguageModel;
         this.objectMapper = objectMapper;
+        this.mmeebbMetrics = mmeebbMetrics;
     }
 
     @Override
@@ -72,10 +75,12 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
         String expected = flashcard.getAnswer().trim().replaceAll("\\s+", " ");
 
         if (normalize(student).equals(normalize(expected))) {
+            mmeebbMetrics.recordAiInteraction("answer_evaluation", "fast_path");
             return AnswerEvaluationDto.accepted();
         }
 
         if (flashcard.getQuestionType() == QuestionType.MULTIPLE_CHOICE && isChoiceLetterFastPath(student, expected)) {
+            mmeebbMetrics.recordAiInteraction("answer_evaluation", "fast_path");
             return new AnswerEvaluationDto(matchesChoiceLetter(student, expected), null, false);
         }
 
@@ -116,6 +121,7 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
                     .trim();
 
             JsonNode node = objectMapper.readTree(cleaned);
+            mmeebbMetrics.recordAiInteraction("answer_evaluation", "gemini");
             boolean isDoubt = node.path("isDoubt").asBoolean(false);
             if (isDoubt) {
                 log.info("[AnswerEvaluation] Flashcard {}: estudante pediu ajuda/explicação em vez de responder",
@@ -131,6 +137,7 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
             return new AnswerEvaluationDto(correct, feedback, false);
 
         } catch (Exception e) {
+            mmeebbMetrics.recordAiInteraction("answer_evaluation", "fallback");
             log.error("[AnswerEvaluation] Falha na correção semântica do flashcard {}: {}",
                     flashcard.getId(), e.getMessage());
             return AnswerEvaluationDto.rejected();

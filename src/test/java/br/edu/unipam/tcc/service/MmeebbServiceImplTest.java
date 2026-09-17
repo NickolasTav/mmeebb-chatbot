@@ -4,6 +4,7 @@ import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.impl.MmeebbServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,7 +26,7 @@ class MmeebbServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        mmeebbService = new MmeebbServiceImpl();
+        mmeebbService = new MmeebbServiceImpl(org.mockito.Mockito.mock(MmeebbMetrics.class));
         student = Student.builder()
                 .id(UUID.randomUUID())
                 .phoneNumber("5534999998888")

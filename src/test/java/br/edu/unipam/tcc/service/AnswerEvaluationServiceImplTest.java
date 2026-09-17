@@ -3,6 +3,7 @@ package br.edu.unipam.tcc.service;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.impl.AnswerEvaluationServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.AiMessage;
@@ -28,7 +29,7 @@ class AnswerEvaluationServiceImplTest {
     @BeforeEach
     void setUp() {
         chatLanguageModel = Mockito.mock(ChatLanguageModel.class);
-        service = new AnswerEvaluationServiceImpl(chatLanguageModel, new ObjectMapper());
+        service = new AnswerEvaluationServiceImpl(chatLanguageModel, new ObjectMapper(), Mockito.mock(MmeebbMetrics.class));
     }
 
     private void stubGeminiResponse(String json) {

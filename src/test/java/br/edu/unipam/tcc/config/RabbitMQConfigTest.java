@@ -6,13 +6,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class RabbitMQConfigTest {
 
@@ -106,5 +109,18 @@ class RabbitMQConfigTest {
         assertNotNull(template);
         assertEquals(connectionFactory, template.getConnectionFactory());
         assertEquals(converter, template.getMessageConverter());
+    }
+
+    @Test
+    @DisplayName("Deve configurar a listener container factory reaproveitando o configurer do Spring Boot")
+    void deveConfigurarListenerContainerFactory() {
+        SimpleRabbitListenerContainerFactoryConfigurer configurer = mock(SimpleRabbitListenerContainerFactoryConfigurer.class);
+        ConnectionFactory connectionFactory = mock(ConnectionFactory.class);
+
+        SimpleRabbitListenerContainerFactory factory =
+                rabbitMQConfig.rabbitListenerContainerFactory(configurer, connectionFactory);
+
+        assertNotNull(factory);
+        verify(configurer).configure(factory, connectionFactory);
     }
 }

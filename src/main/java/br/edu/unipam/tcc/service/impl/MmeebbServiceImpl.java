@@ -4,6 +4,7 @@ import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.MmeebbService;
 import org.springframework.stereotype.Service;
 
@@ -12,6 +13,12 @@ import java.time.LocalDateTime;
 
 @Service
 public class MmeebbServiceImpl implements MmeebbService {
+
+    private final MmeebbMetrics mmeebbMetrics;
+
+    public MmeebbServiceImpl(MmeebbMetrics mmeebbMetrics) {
+        this.mmeebbMetrics = mmeebbMetrics;
+    }
 
     @Override
     public int calculateIntervalDays(int nIndex) {
@@ -77,6 +84,11 @@ public class MmeebbServiceImpl implements MmeebbService {
 
         LocalDate nextDate = calculateNextReviewDate(answeredAt.toLocalDate(), schedule.getNIndex());
         schedule.setNextReviewDate(nextDate);
+
+        String specialty = schedule.getFlashcard() != null && schedule.getFlashcard().getSubject() != null
+                ? schedule.getFlashcard().getSubject().getName()
+                : null;
+        mmeebbMetrics.recordReview(isCorrect, specialty);
 
         return schedule;
     }

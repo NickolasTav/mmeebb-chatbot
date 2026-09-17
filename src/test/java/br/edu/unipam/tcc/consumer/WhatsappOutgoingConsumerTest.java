@@ -1,6 +1,7 @@
 package br.edu.unipam.tcc.consumer;
 
 import br.edu.unipam.tcc.dto.OutgoingMessageDto;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.UazapiClientService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -19,12 +20,15 @@ class WhatsappOutgoingConsumerTest {
     @Mock
     private UazapiClientService uazapiClientService;
 
+    @Mock
+    private MmeebbMetrics mmeebbMetrics;
+
     private WhatsappOutgoingConsumer consumer;
 
     @BeforeEach
     void setUp() {
         // Inicializa com delays zerados para testes unitários rápidos
-        consumer = new WhatsappOutgoingConsumer(uazapiClientService, 0L, 0L, 0L);
+        consumer = new WhatsappOutgoingConsumer(uazapiClientService, mmeebbMetrics, 0L, 0L, 0L);
     }
 
     @Test
@@ -76,7 +80,7 @@ class WhatsappOutgoingConsumerTest {
     void deveExecutarComAtrasosConfigurados() {
         // Consumer com delays mínimos de 1ms para testar a rota com sleeps
         WhatsappOutgoingConsumer consumerWithDelay = new WhatsappOutgoingConsumer(
-                uazapiClientService, 1L, 2L, 1L
+                uazapiClientService, mmeebbMetrics, 1L, 2L, 1L
         );
 
         OutgoingMessageDto outgoingDto = new OutgoingMessageDto(

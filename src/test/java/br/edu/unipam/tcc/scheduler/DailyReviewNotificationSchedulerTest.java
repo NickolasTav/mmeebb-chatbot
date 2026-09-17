@@ -5,6 +5,7 @@ import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
+import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,9 @@ class DailyReviewNotificationSchedulerTest {
     @Mock
     private RabbitTemplate rabbitTemplate;
 
+    @Mock
+    private Tracer tracer;
+
     private DailyReviewNotificationScheduler scheduler;
 
     @BeforeEach
@@ -41,7 +45,8 @@ class DailyReviewNotificationSchedulerTest {
         scheduler = new DailyReviewNotificationScheduler(
                 studentRepository,
                 repetitionScheduleRepository,
-                rabbitTemplate
+                rabbitTemplate,
+                tracer
         );
     }
 

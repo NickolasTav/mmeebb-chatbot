@@ -11,6 +11,7 @@ import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.CourseRepository;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
@@ -76,6 +77,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final IntentRouterService intentRouterService;
     private final AnswerEvaluationService answerEvaluationService;
     private final StudentOnboardingService studentOnboardingService;
+    private final MmeebbMetrics mmeebbMetrics;
 
     @Override
     public void processIncomingMessage(UazapiWebhookDto webhookDto) {
@@ -299,14 +301,17 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private void handleMainMenuState(ChatSessionState session, String rawText) {
         switch (rawText) {
             case "1" -> {
+                mmeebbMetrics.recordAiInteraction("intent_router", "fast_path");
                 startReviewMode(session);
                 return;
             }
             case "2" -> {
+                mmeebbMetrics.recordAiInteraction("intent_router", "fast_path");
                 enterDoubtMode(session);
                 return;
             }
             case "3" -> {
+                mmeebbMetrics.recordAiInteraction("intent_router", "fast_path");
                 startCourseSelection(session);
                 return;
             }

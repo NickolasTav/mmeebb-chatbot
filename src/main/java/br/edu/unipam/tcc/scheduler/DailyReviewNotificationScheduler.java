@@ -3,8 +3,10 @@ package br.edu.unipam.tcc.scheduler;
 import br.edu.unipam.tcc.config.RabbitMQConfig;
 import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.entity.Student;
+import br.edu.unipam.tcc.observability.CorrelationMdcHelper;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
+import io.micrometer.tracing.Tracer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,15 +26,18 @@ public class DailyReviewNotificationScheduler {
     private final StudentRepository studentRepository;
     private final RepetitionScheduleRepository repetitionScheduleRepository;
     private final RabbitTemplate rabbitTemplate;
+    private final Tracer tracer;
 
     public DailyReviewNotificationScheduler(
             StudentRepository studentRepository,
             RepetitionScheduleRepository repetitionScheduleRepository,
-            RabbitTemplate rabbitTemplate
+            RabbitTemplate rabbitTemplate,
+            Tracer tracer
     ) {
         this.studentRepository = studentRepository;
         this.repetitionScheduleRepository = repetitionScheduleRepository;
         this.rabbitTemplate = rabbitTemplate;
+        this.tracer = tracer;
     }
 
     /**
@@ -41,6 +46,7 @@ public class DailyReviewNotificationScheduler {
      */
     @Scheduled(cron = "${mmeebb.scheduler.cron:0 0 8 * * *}", zone = "America/Sao_Paulo")
     public void sendDailyReviewNotifications() {
+        CorrelationMdcHelper.ensureTraceId(tracer);
         log.info("[DailyScheduler] Iniciando rotina diária de notificações ativas do método MMEEBB.");
 
         List<Student> activeStudents = studentRepository.findByActiveTrue();
@@ -53,35 +59,39 @@ public class DailyReviewNotificationScheduler {
         int notificationsSent = 0;
 
         for (Student student : activeStudents) {
-            try {
-                long pendingCount = repetitionScheduleRepository
-                        .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(student.getId(), today);
+            int[] sentInThisIteration = {0};
+            CorrelationMdcHelper.runWithContext(student.getPhoneNumber(), "DAILY_SCHEDULER", () -> {
+                try {
+                    long pendingCount = repetitionScheduleRepository
+                            .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(student.getId(), today);
 
-                if (pendingCount > 0) {
-                    String studentName = student.getFullName() != null && !student.getFullName().isBlank()
-                            ? student.getFullName().trim()
-                            : "Estudante";
+                    if (pendingCount > 0) {
+                        String studentName = student.getFullName() != null && !student.getFullName().isBlank()
+                                ? student.getFullName().trim()
+                                : "Estudante";
 
-                    String messageText = buildNotificationMessage(studentName, pendingCount);
-                    OutgoingMessageDto outgoingDto = new OutgoingMessageDto(student.getPhoneNumber(), messageText);
+                        String messageText = buildNotificationMessage(studentName, pendingCount);
+                        OutgoingMessageDto outgoingDto = new OutgoingMessageDto(student.getPhoneNumber(), messageText);
 
-                    rabbitTemplate.convertAndSend(
-                            RabbitMQConfig.EXCHANGE_NAME,
-                            RabbitMQConfig.OUTGOING_ROUTING_KEY,
-                            outgoingDto
-                    );
+                        rabbitTemplate.convertAndSend(
+                                RabbitMQConfig.EXCHANGE_NAME,
+                                RabbitMQConfig.OUTGOING_ROUTING_KEY,
+                                outgoingDto
+                        );
 
-                    notificationsSent++;
-                    log.info("[DailyScheduler] Notificação push enfileirada para [{}] ({} pendências)",
-                            student.getPhoneNumber(), pendingCount);
-                } else {
-                    log.debug("[DailyScheduler] Nenhuma revisão pendente para estudante [{}] hoje.",
-                            student.getPhoneNumber());
+                        sentInThisIteration[0] = 1;
+                        log.info("[DailyScheduler] Notificação push enfileirada para [{}] ({} pendências)",
+                                student.getPhoneNumber(), pendingCount);
+                    } else {
+                        log.debug("[DailyScheduler] Nenhuma revisão pendente para estudante [{}] hoje.",
+                                student.getPhoneNumber());
+                    }
+                } catch (Exception e) {
+                    log.error("[DailyScheduler] Falha ao processar notificação diária para o estudante [{}]: {}",
+                            student.getPhoneNumber(), e.getMessage(), e);
                 }
-            } catch (Exception e) {
-                log.error("[DailyScheduler] Falha ao processar notificação diária para o estudante [{}]: {}",
-                        student.getPhoneNumber(), e.getMessage(), e);
-            }
+            });
+            notificationsSent += sentInThisIteration[0];
         }
 
         log.info("[DailyScheduler] Rotina diária concluída. Total de notificações enfileiradas: {} de {} estudantes ativos.",

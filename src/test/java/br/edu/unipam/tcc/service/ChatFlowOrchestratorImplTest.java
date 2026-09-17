@@ -17,6 +17,7 @@ import br.edu.unipam.tcc.repository.FlashcardRepository;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentCourseRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.ChatFlowOrchestratorImpl;
 import br.edu.unipam.tcc.session.ChatSessionState;
@@ -67,6 +68,7 @@ class ChatFlowOrchestratorImplTest {
     @Mock private IntentRouterService intentRouterService;
     @Mock private AnswerEvaluationService answerEvaluationService;
     @Mock private StudentOnboardingService studentOnboardingService;
+    @Mock private MmeebbMetrics mmeebbMetrics;
 
     @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
 

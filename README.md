@@ -303,6 +303,8 @@ Na raiz do repositório, execute:
 docker compose up -d
 ```
 > Isso iniciará o **PostgreSQL 16 com pgvector** na porta `5432`, o **RabbitMQ** nas portas `5672` (AMQP) e `15672` (Painel Web: [http://localhost:15672](http://localhost:15672)) e o **Redis 7** na porta `6379`, usado para o estado conversacional do chatbot.
+>
+> Se a porta `5432` já estiver ocupada por outro Postgres na sua máquina, defina `POSTGRES_HOST_PORT=5433` (ou outra porta livre) no `.env` **antes** de subir os containers — o `docker-compose.yml` lê essa variável (`${POSTGRES_HOST_PORT:-5432}:5432`) e ajuste `SPRING_DATASOURCE_URL` de acordo.
 
 ### Passo 2: Configurar Variáveis de Ambiente (.env) e Rodar o Backend
 Copie o modelo de ambiente ou edite o arquivo `.env` na raiz do projeto:
@@ -324,6 +326,8 @@ ADMIN_API_KEY=teste
 UAZAPI_BASE_URL=https://free.uazapi.com
 UAZAPI_API_KEY=sua_chave_uazapi
 UAZAPI_INSTANCE=sua_instancia
+# Opcional: só se você quiser que o painel /setup provisione instâncias sozinho (ver seção 9)
+UAZAPI_ADMIN_TOKEN=
 ```
 
 Em seguida, inicialize a aplicação:
@@ -360,15 +364,16 @@ curl.exe -i -X POST "http://localhost:8080/api/admin/rag/ingest" `
 
 O texto é segmentado (300 tokens, overlap de 30) e cada trecho recebe `course_id`, `subject_id` e `topic`. A API valida que a disciplina informada pertence de fato ao curso informado.
 
-### Passo 4: Expor a Porta Local via Ngrok
-Em um terminal separado:
+### Passo 4: Conectar o WhatsApp (túnel, QR Code e webhook)
+
+Suba o túnel (o painel ainda não inicia o processo do Ngrok sozinho, só detecta um já rodando):
 ```powershell
 ngrok http 8080
 ```
-Copie a URL pública HTTPS gerada (ex: `https://xxxx.ngrok-free.app`).
 
-### Passo 5: Configurar o Webhook na Uazapi
-No painel da Uazapi, configure:
+**Caminho recomendado a partir daqui — painel web automático:** acesse **`http://localhost:8080/setup`** com a aplicação rodando. Ele detecta o túnel Ngrok ativo automaticamente, provisiona uma instância na Uazapi se necessário (usando `UAZAPI_ADMIN_TOKEN`), gera e exibe o QR Code, faz o pareamento por polling e sincroniza o webhook sozinho assim que a instância conecta — zero passo manual além de rodar o `ngrok http 8080` e escanear o QR. Detalhes completos na seção 9.
+
+**Caminho 100% manual (fallback, sem o painel):** copie a URL pública HTTPS gerada pelo Ngrok (ex: `https://xxxx.ngrok-free.app`) e, no painel da Uazapi, configure:
 - **Webhook URL:** `https://xxxx.ngrok-free.app/webhook/uazapi`
 - **Eventos:** `messages.upsert` (ou `messages`)
 
@@ -381,6 +386,7 @@ No painel da Uazapi, configure:
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/mmeebb_db` | URL de conexão com o PostgreSQL |
 | `SPRING_DATASOURCE_USERNAME` | `postgres` | Usuário do banco de dados |
 | `SPRING_DATASOURCE_PASSWORD` | `postgres` | Senha do banco de dados |
+| `POSTGRES_HOST_PORT` | `5432` | Porta do host mapeada pro Postgres no `docker-compose.yml` (mude se `5432` já estiver em uso) |
 | `SPRING_RABBITMQ_HOST` | `localhost` | Host do RabbitMQ |
 | `SPRING_RABBITMQ_PORT` | `5672` | Porta AMQP do RabbitMQ |
 | `SPRING_RABBITMQ_USERNAME` | `guest` | Usuário do RabbitMQ |
@@ -393,20 +399,45 @@ No painel da Uazapi, configure:
 | `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi |
 | `UAZAPI_API_KEY` | *(Vazio)* | Token/Chave de autenticação da Uazapi |
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
+| `UAZAPI_ADMIN_TOKEN` | *(Vazio)* | Admintoken da sua conta Uazapi (dashboard, **não** é a mesma coisa que `UAZAPI_API_KEY`) — habilita o botão "Provisionar Nova Instância" no painel `/setup` |
 | `UAZAPI_TYPING_DELAY_MS` | `2000` | Delay simulado de digitação (*composing*) |
 | `GEMINI_API_KEY` | *(Vazio)* | Chave de API do Google AI Studio (Gemini) |
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash-lite` | Modelo de chat principal (failover automático para `gemini-3.5-flash` em picos de demanda) |
 | `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | Modelo de embeddings do RAG (768 dimensões) |
 | `GEMINI_TEMPERATURE` | `0.2` | Temperatura do modelo de chat (baixa, para respostas clínicas objetivas) |
-| `ADMIN_API_KEY` | `teste` | Chave de segurança para endpoints `/api/admin/**` |
+| `ADMIN_API_KEY` | `teste` | Chave de segurança para endpoints `/api/admin/**` **e `/api/v1/setup/**`** (painel de conectividade) |
+| `NGROK_CLIENT_API_URL` | `http://127.0.0.1:4040` | URL da API local de controle do Ngrok, usada pelo painel `/setup` para descobrir a URL pública do túnel |
 
 ---
 
 ## 9. Integração com WhatsApp (Uazapi & Ngrok)
 
-Para mais detalhes sobre endpoints, estruturas JSON de requisição e eventos de webhook, consulte a documentação dedicada:
-- 📖 [Referência Completa da API Uazapi](docs/uazapi/UAZAPI_API_REFERENCE.md)
-- 🚀 [Guia Prático de Execução Local com Ngrok](docs/GUIA_NGROK_WEBHOOK.md)
+### 9.1. Painel de Conectividade (`/setup`)
+
+Conectar o bot ao WhatsApp manualmente (abrir o Ngrok, copiar a URL, colar no painel da Uazapi, gerar QR na mão) é um processo repetitivo e frágil para demonstrações — principalmente porque o **servidor demo gratuito da Uazapi (`free.uazapi.com`) expira instâncias automaticamente após 1 hora**. Para resolver isso, a aplicação expõe um painel web nativo em **`http://localhost:8080/setup`**, protegido pela mesma `ADMIN_API_KEY` dos endpoints `/api/admin/**`.
+
+Fluxo do painel:
+1. **Detecção do túnel**: consulta `GET http://127.0.0.1:4040/api/tunnels` (API local do Ngrok) para achar a URL pública ativa. Não inicia o processo do Ngrok sozinho — ele precisa estar rodando (`ngrok http 8080`).
+2. **Provisionamento automático de instância** (`POST /api/v1/setup/instance/provision`): se não houver instância/token salvos (ou quando você clicar em "Provisionar Nova Instância"), a aplicação chama `POST /instance/init` na Uazapi com o **admintoken** da sua conta (`UAZAPI_ADMIN_TOKEN`, **diferente** do token de instância), recebe um token novo e salva **instância + token na tabela `system_configurations`** — não fica hardcoded em `.env`, então sobrevive a reinícios da aplicação mesmo trocando de instância a cada expiração de 1h.
+3. **QR Code** (`POST /api/v1/setup/instance/connect`): chama `POST /instance/connect` com o token salvo, extrai `instance.qrcode` (já em `data:image/png;base64,...`) e exibe no painel com polling de status a cada 3s.
+4. **Webhook automático**: assim que o polling detecta a instância `connected`, a aplicação configura o webhook sozinha (`POST /webhook` com a URL do Ngrok + eventos `messages.upsert`/`messages`) — idempotente, não reconfigura se já estiver apontando pra URL certa.
+5. **Teste de fumaça**: botão dedicado dispara uma mensagem de teste real para o número informado.
+
+### 9.2. Contrato real da API Uazapi
+
+A documentação oficial (`docs.uazapi.com`) é uma SPA em JavaScript sem conteúdo acessível via scraping simples; o contrato abaixo foi confirmado testando diretamente contra `https://free.uazapi.com` (não por documentação lida):
+
+| Ação | Rota | Header | Observação |
+| :--- | :--- | :--- | :--- |
+| Criar instância | `POST /instance/init` | `admintoken` | Body `{"name": "..."}`. Resposta traz `token` (novo) no root e em `instance.token`. |
+| Conectar / obter QR | `POST /instance/connect` | `token` | **Sem** nome de instância na URL — o token sozinho identifica a instância. QR vem em `instance.qrcode`. |
+| Consultar status | `GET /instance/status` | `token` | Estado em `instance.status` (`connecting`/`connected`/`disconnected`). |
+| Configurar webhook | `POST /webhook` | `token` | Body `{"url", "events", "enabled"}`. |
+| Desconectar / apagar | `POST /instance/disconnect` / `DELETE /instance` | `token` | Disconnect mantém a instância; delete remove de vez. |
+
+### 9.3. Referência adicional (arquivos locais, não versionados)
+
+`docs/GUIA_NGROK_WEBHOOK.md` e `docs/uazapi/UAZAPI_API_REFERENCE.md` existem no repositório de trabalho local mas **não são versionados** (`docs/` está no `.gitignore` — são notas de planejamento, não documentação pública). Se você tem o repositório clonado localmente com esses arquivos, eles cobrem o fluxo 100% manual passo a passo.
 
 ---
 
@@ -420,9 +451,9 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 202
+- **Total de Testes Unitários:** 213
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push e Controladores Administrativos.
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos e **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook).
 
 > O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
 
@@ -449,11 +480,12 @@ c:\projeto-tcc
 │   └── GeminiServiceCustomizer.java  # Timeout estendido + retry/failover 503/429 no cliente Gemini
 ├── src/main/resources/
 │   ├── db/migration/    # Scripts SQL Flyway (V1__init_schema.sql em diante)
+│   ├── static/setup/    # Painel web de conectividade Uazapi/Ngrok (index.html + js/setup.js)
 │   └── application.yml  # Configurações do Spring Boot
-├── docs/                # Especificações técnicas e manuais operacionais
+├── docs/                # Especificações técnicas e manuais operacionais (local, não versionado)
 │   ├── uazapi/          # Referência completa da API Uazapi
 │   └── GUIA_NGROK_WEBHOOK.md
-├── docker-compose.yml   # PostgreSQL 16 (pgvector) + RabbitMQ Management
+├── docker-compose.yml   # PostgreSQL 16 (pgvector) + RabbitMQ Management + Redis
 └── pom.xml              # Dependências Maven do projeto
 ```
 

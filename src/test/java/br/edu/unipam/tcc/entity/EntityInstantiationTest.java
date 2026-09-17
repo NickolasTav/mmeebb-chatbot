@@ -4,6 +4,7 @@ import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.DifficultyLevel;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.session.ChatSessionState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -100,15 +101,16 @@ class EntityInstantiationTest {
     }
 
     @Test
-    @DisplayName("Deve instanciar ChatSession com estado inicial NEW")
-    void deveInstanciarChatSessionCorretamente() {
-        ChatSession session = ChatSession.builder()
+    @DisplayName("Deve instanciar ChatSessionState com estado inicial NEW e sem cadastro")
+    void deveInstanciarChatSessionStateCorretamente() {
+        ChatSessionState session = ChatSessionState.builder()
                 .phoneNumber("5534999998888")
                 .lastInteractionAt(LocalDateTime.now())
                 .build();
 
         assertEquals(ChatState.NEW, session.getCurrentState());
         assertEquals("5534999998888", session.getPhoneNumber());
-        assertNull(session.getSelectedCourse());
+        assertNull(session.getSelectedCourseId());
+        assertFalse(session.isRegistered());
     }
 }

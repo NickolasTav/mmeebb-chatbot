@@ -1,31 +1,49 @@
 package br.edu.unipam.tcc.service.impl;
 
+import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
+import br.edu.unipam.tcc.dto.IntentResultDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
-import br.edu.unipam.tcc.entity.*;
+import br.edu.unipam.tcc.entity.Course;
+import br.edu.unipam.tcc.entity.Flashcard;
+import br.edu.unipam.tcc.entity.RepetitionSchedule;
+import br.edu.unipam.tcc.entity.Student;
+import br.edu.unipam.tcc.entity.StudentCourse;
+import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatState;
-import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
-import br.edu.unipam.tcc.repository.*;
+import br.edu.unipam.tcc.repository.CourseRepository;
+import br.edu.unipam.tcc.repository.FlashcardRepository;
+import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
+import br.edu.unipam.tcc.repository.StudentCourseRepository;
+import br.edu.unipam.tcc.repository.StudentRepository;
+import br.edu.unipam.tcc.repository.SubjectRepository;
+import br.edu.unipam.tcc.service.AnswerEvaluationService;
 import br.edu.unipam.tcc.service.ChatFlowOrchestrator;
+import br.edu.unipam.tcc.service.IntentRouterService;
 import br.edu.unipam.tcc.service.MmeebbService;
+import br.edu.unipam.tcc.service.StudentOnboardingService;
 import br.edu.unipam.tcc.service.SubjectRagService;
 import br.edu.unipam.tcc.service.UazapiClientService;
+import br.edu.unipam.tcc.session.ChatSessionState;
+import br.edu.unipam.tcc.session.ChatSessionStore;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
- * Implementação do orquestrador de fluxo conversacional do Chatbot MMEEBB.
- * Gerencia a Máquina de Estados Finita (FSM), sessões de usuários, comandos globais de reset,
- * revisões de flashcards via motor MMEEBB, consultas RAG multidisciplinares e mensageria WhatsApp.
+ * Orquestrador do fluxo conversacional do Chatbot MMEEBB.
+ * O estado da conversa vive no Redis; o Postgres guarda apenas o que é durável
+ * (estudante, matrícula e agendamentos de repetição espaçada).
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
     private static final Set<String> EXIT_COMMANDS = Set.of(
@@ -39,15 +57,15 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             "/menu", "/inicio", "/start", "/reset"
     );
 
-    private static final Set<String> GREETING_OR_HELP_COMMANDS = Set.of(
-            "ola", "olá", "oi", "oii", "oiii", "bom dia", "boa tarde", "boa noite",
-            "eai", "eae", "fala", "salve", "alo", "alô", "hello", "hi", "hey",
-            "ajuda", "help", "socorro", "como funciona", "opcoes", "opções", "comandos", "info",
-            "/help", "/ajuda"
+    private static final Set<String> SKIP_COMMANDS = Set.of(
+            "pular", "nao tenho", "não tenho", "nao sei", "não sei", "-", "skip"
     );
 
-    private final ChatSessionRepository chatSessionRepository;
+    private static final int MAX_ACADEMIC_PERIOD = 20;
+
+    private final ChatSessionStore chatSessionStore;
     private final StudentRepository studentRepository;
+    private final StudentCourseRepository studentCourseRepository;
     private final CourseRepository courseRepository;
     private final SubjectRepository subjectRepository;
     private final FlashcardRepository flashcardRepository;
@@ -55,31 +73,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final MmeebbService mmeebbService;
     private final UazapiClientService uazapiClientService;
     private final SubjectRagService subjectRagService;
-
-    public ChatFlowOrchestratorImpl(
-            ChatSessionRepository chatSessionRepository,
-            StudentRepository studentRepository,
-            CourseRepository courseRepository,
-            SubjectRepository subjectRepository,
-            FlashcardRepository flashcardRepository,
-            RepetitionScheduleRepository repetitionScheduleRepository,
-            MmeebbService mmeebbService,
-            UazapiClientService uazapiClientService,
-            SubjectRagService subjectRagService
-    ) {
-        this.chatSessionRepository = chatSessionRepository;
-        this.studentRepository = studentRepository;
-        this.courseRepository = courseRepository;
-        this.subjectRepository = subjectRepository;
-        this.flashcardRepository = flashcardRepository;
-        this.repetitionScheduleRepository = repetitionScheduleRepository;
-        this.mmeebbService = mmeebbService;
-        this.uazapiClientService = uazapiClientService;
-        this.subjectRagService = subjectRagService;
-    }
+    private final IntentRouterService intentRouterService;
+    private final AnswerEvaluationService answerEvaluationService;
+    private final StudentOnboardingService studentOnboardingService;
 
     @Override
-    @Transactional
     public void processIncomingMessage(UazapiWebhookDto webhookDto) {
         if (webhookDto == null) {
             log.warn("[Orchestrator] Payload nulo recebido.");
@@ -102,384 +100,505 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
         log.info("[Orchestrator] Processando mensagem de [{}]: \"{}\"", phoneNumber, rawText);
 
-        // 1. Resolução de Sessão e Estudante
-        ChatSession session = resolveSession(phoneNumber);
-        session.setLastInteractionAt(LocalDateTime.now());
+        ChatSessionState session = resolveSession(phoneNumber);
 
-        // 2. Interceptação de Comandos Globais de Saída e Reset
-        if (isExitCommand(lowerText)) {
-            handleExitCommand(session, phoneNumber);
-            return;
+        // Comandos globais só valem depois do cadastro: durante o formulário, "menu"
+        // é uma resposta possível do estudante e não deve abortar o fluxo.
+        if (session.isRegistered()) {
+            if (EXIT_COMMANDS.contains(lowerText)) {
+                handleExitCommand(session);
+                return;
+            }
+            if (RESET_COMMANDS.contains(lowerText)) {
+                handleGlobalReset(session);
+                return;
+            }
         }
 
-        if (isGlobalResetCommand(lowerText)) {
-            handleGlobalReset(session, phoneNumber);
-            return;
-        }
-
-        // 3. Execução da FSM por Estado
         switch (session.getCurrentState()) {
-            case NEW -> handleNewState(session, phoneNumber);
-            case MAIN_MENU -> handleMainMenuState(session, phoneNumber, rawText, lowerText);
-            case REVIEW_MODE -> handleReviewModeState(session, phoneNumber, rawText);
-            case RAG_DOUBT_MODE -> handleRagDoubtModeState(session, phoneNumber, rawText);
-            case SELECTING_COURSE -> handleSelectingCourseState(session, phoneNumber, rawText);
-            case SELECTING_SUBJECT -> handleSelectingSubjectState(session, phoneNumber, rawText);
+            case NEW -> startOnboarding(session);
+            case AWAITING_FULL_NAME -> handleFullNameInput(session, rawText);
+            case AWAITING_RA -> handleRaInput(session, rawText, lowerText);
+            case AWAITING_COURSE -> handleCourseInput(session, rawText);
+            case AWAITING_ACADEMIC_PERIOD -> handleAcademicPeriodInput(session, rawText);
+            case MAIN_MENU -> handleMainMenuState(session, rawText);
+            case REVIEW_MODE -> handleReviewModeState(session, rawText);
+            case RAG_DOUBT_MODE -> handleRagDoubtModeState(session, rawText);
+            case SELECTING_COURSE -> handleSelectingCourseState(session, rawText);
+            case SELECTING_SUBJECT -> handleSelectingSubjectState(session, rawText);
         }
     }
 
-    private ChatSession resolveSession(String phoneNumber) {
-        return chatSessionRepository.findByPhoneNumber(phoneNumber)
-                .orElseGet(() -> {
-                    Student student = studentRepository.findByPhoneNumber(phoneNumber)
-                            .orElseGet(() -> studentRepository.save(
-                                    Student.builder()
-                                            .phoneNumber(phoneNumber)
-                                            .fullName("Estudante")
-                                            .active(true)
-                                            .build()
-                            ));
+    // =========================================================================
+    // Resolução de sessão
+    // =========================================================================
 
-                    ChatSession newSession = ChatSession.builder()
-                            .phoneNumber(phoneNumber)
-                            .student(student)
-                            .currentState(ChatState.NEW)
-                            .lastInteractionAt(LocalDateTime.now())
-                            .build();
+    /**
+     * Recupera a sessão do Redis. Quando a sessão expirou ou é o primeiro contato,
+     * reconstrói o estado a partir do cadastro no Postgres: o telefone é a chave única
+     * do estudante, então um número já cadastrado nunca refaz o formulário.
+     */
+    private ChatSessionState resolveSession(String phoneNumber) {
+        return chatSessionStore.find(phoneNumber)
+                .orElseGet(() -> rebuildFromDatabase(phoneNumber));
+    }
 
-                    return chatSessionRepository.save(newSession);
+    private ChatSessionState rebuildFromDatabase(String phoneNumber) {
+        ChatSessionState state = ChatSessionState.builder().phoneNumber(phoneNumber).build();
+
+        studentRepository.findByPhoneNumber(phoneNumber).ifPresent(student -> {
+            state.setStudentId(student.getId());
+            state.setCurrentState(ChatState.MAIN_MENU);
+            studentCourseRepository.findByStudentIdAndActiveTrue(student.getId()).stream()
+                    .findFirst()
+                    .map(StudentCourse::getCourse)
+                    .ifPresent(course -> state.setSelectedCourseId(course.getId()));
+            log.info("[Orchestrator] Sessão reconstruída para estudante já cadastrado [{}]", phoneNumber);
+        });
+
+        return state;
+    }
+
+    private Student loadStudent(ChatSessionState session) {
+        return studentRepository.findById(session.getStudentId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Sessão aponta para estudante inexistente: " + session.getStudentId()));
+    }
+
+    // =========================================================================
+    // Onboarding (formulário de primeiro contato)
+    // =========================================================================
+
+    private void startOnboarding(ChatSessionState session) {
+        log.info("[Orchestrator] Primeiro contato detectado: [{}]. Iniciando formulário de cadastro.",
+                session.getPhoneNumber());
+
+        transitionTo(session, ChatState.AWAITING_FULL_NAME);
+
+        send(session, """
+                👋 *Bem-vindo ao Chatbot MMEEBB UNIPAM!*
+                Seu assistente de repetição espaçada para os estudos.
+
+                Como este é seu primeiro acesso, preciso de alguns dados rápidos para montar seu plano de revisões.
+
+                📝 *1 de 3* — Qual é o seu *nome completo*?""");
+    }
+
+    private void handleFullNameInput(ChatSessionState session, String rawText) {
+        String name = rawText.replaceAll("\\s+", " ").trim();
+
+        if (name.length() < 3 || !name.contains(" ")) {
+            send(session, """
+                    ⚠️ Preciso do seu *nome completo* (nome e sobrenome).
+
+                    _Exemplo: Maria Silva Andrade_""");
+            return;
+        }
+
+        session.setDraftFullName(name);
+        transitionTo(session, ChatState.AWAITING_RA);
+
+        send(session, String.format("""
+                Prazer, *%s*! 🙌
+
+                📝 *2 de 3* — Qual é o seu *RA (registro acadêmico)*?
+
+                _Se não souber agora, envie *pular*._""", firstName(name)));
+    }
+
+    private void handleRaInput(ChatSessionState session, String rawText, String lowerText) {
+        if (!SKIP_COMMANDS.contains(lowerText)) {
+            String ra = rawText.replaceAll("[^A-Za-z0-9]", "").trim();
+
+            if (ra.isEmpty()) {
+                send(session, "⚠️ RA inválido. Envie apenas números e letras, ou *pular* para informar depois.");
+                return;
+            }
+
+            Optional<Student> owner = studentRepository.findByRa(ra);
+            if (owner.isPresent() && !owner.get().getPhoneNumber().equals(session.getPhoneNumber())) {
+                send(session, """
+                        ⚠️ Este RA já está vinculado a outro número de WhatsApp.
+
+                        _Confira o número digitado ou envie *pular* para seguir sem o RA._""");
+                return;
+            }
+
+            session.setDraftRa(ra);
+        }
+
+        List<Course> courses = courseRepository.findByActiveTrue();
+        if (courses.isEmpty()) {
+            log.error("[Orchestrator] Cadastro interrompido: não há cursos ativos no banco.");
+            send(session, "⚠️ Ainda não há cursos cadastrados no sistema. Procure a coordenação e tente novamente mais tarde.");
+            return;
+        }
+
+        transitionTo(session, ChatState.AWAITING_COURSE);
+        send(session, "📝 *3 de 3* — Selecione o seu *curso*:\n\n" + numberedList(courses.stream().map(Course::getName).toList()));
+    }
+
+    private void handleCourseInput(ChatSessionState session, String rawText) {
+        List<Course> courses = courseRepository.findByActiveTrue();
+
+        Optional<Course> chosen = parseSelection(rawText, courses);
+        if (chosen.isEmpty()) {
+            send(session, "⚠️ Opção inválida. Envie o *número* do seu curso:\n\n"
+                    + numberedList(courses.stream().map(Course::getName).toList()));
+            return;
+        }
+
+        session.setDraftCourseId(chosen.get().getId());
+        transitionTo(session, ChatState.AWAITING_ACADEMIC_PERIOD);
+
+        send(session, String.format("""
+                Curso *%s* selecionado! ✅
+
+                Por último: em qual *período* você está? _(envie apenas o número, ex.: 8)_""",
+                chosen.get().getName()));
+    }
+
+    private void handleAcademicPeriodInput(ChatSessionState session, String rawText) {
+        Integer period = parsePositiveInt(rawText);
+        if (period == null || period > MAX_ACADEMIC_PERIOD) {
+            send(session, "⚠️ Período inválido. Envie apenas o número do período, entre *1* e *"
+                    + MAX_ACADEMIC_PERIOD + "*.");
+            return;
+        }
+
+        Student student = studentOnboardingService.register(
+                session.getPhoneNumber(),
+                session.getDraftFullName(),
+                session.getDraftRa(),
+                session.getDraftCourseId(),
+                period
+        );
+
+        session.setStudentId(student.getId());
+        session.setSelectedCourseId(session.getDraftCourseId());
+        session.clearOnboardingDraft();
+        transitionTo(session, ChatState.MAIN_MENU);
+
+        long pending = countPendingReviews(student.getId());
+
+        send(session, String.format("""
+                🎉 *Cadastro concluído, %s!*
+
+                Preparei *%d* questão(ões) para sua primeira rodada de revisões.
+
+                %s
+
+                💬 _Você também pode escrever livremente: pergunte qualquer dúvida de conteúdo que eu consulto o acervo da sua disciplina._""",
+                firstName(student.getFullName()), pending, menuBody()));
+    }
+
+    // =========================================================================
+    // Menu principal e roteamento por intenção
+    // =========================================================================
+
+    private void handleMainMenuState(ChatSessionState session, String rawText) {
+        switch (rawText) {
+            case "1" -> {
+                startReviewMode(session);
+                return;
+            }
+            case "2" -> {
+                enterDoubtMode(session);
+                return;
+            }
+            case "3" -> {
+                startCourseSelection(session);
+                return;
+            }
+            default -> { /* texto livre: segue para a classificação de intenção */ }
+        }
+
+        IntentResultDto intent = intentRouterService.classify(rawText);
+        applySubjectHint(session, intent.subjectHint());
+
+        switch (intent.intent()) {
+            case START_REVIEW -> startReviewMode(session);
+            case CHANGE_SUBJECT -> startCourseSelection(session);
+            case SHOW_MENU -> sendMainMenu(session);
+            case EXIT -> handleExitCommand(session);
+            case ASK_DOUBT -> {
+                // Responde a dúvida imediatamente e mantém o aluno no modo de perguntas.
+                transitionTo(session, ChatState.RAG_DOUBT_MODE);
+                answerDoubt(session, rawText);
+            }
+        }
+    }
+
+    /**
+     * Associa a disciplina citada em texto livre ("dúvida em cardiologia") ao escopo da sessão,
+     * restringindo a busca vetorial a essa disciplina.
+     */
+    private void applySubjectHint(ChatSessionState session, String subjectHint) {
+        if (subjectHint == null || subjectHint.isBlank() || session.getSelectedCourseId() == null) {
+            return;
+        }
+
+        subjectRepository
+                .findByCourseIdAndActiveTrueAndNameContainingIgnoreCase(session.getSelectedCourseId(), subjectHint.trim())
+                .stream()
+                .findFirst()
+                .ifPresent(subject -> {
+                    log.info("[Orchestrator] Disciplina \"{}\" inferida da mensagem e aplicada à sessão de [{}]",
+                            subject.getName(), session.getPhoneNumber());
+                    session.setSelectedSubjectId(subject.getId());
                 });
     }
 
-    private boolean isExitCommand(String text) {
-        if (text == null || text.isBlank()) return false;
-        return EXIT_COMMANDS.contains(text.toLowerCase().trim());
+    private void enterDoubtMode(ChatSessionState session) {
+        transitionTo(session, ChatState.RAG_DOUBT_MODE);
+        send(session, """
+                💡 *Modo Dúvidas ativado*
+
+                Envie sua pergunta sobre qualquer conteúdo do acervo que eu consulto o material da sua disciplina.
+
+                _Digite *menu* a qualquer momento para voltar._""");
     }
 
-    private boolean isGlobalResetCommand(String text) {
-        if (text == null || text.isBlank()) return false;
-        return RESET_COMMANDS.contains(text.toLowerCase().trim());
-    }
+    // =========================================================================
+    // Modo revisão (motor MMEEBB)
+    // =========================================================================
 
-    private boolean isGreetingOrHelpCommand(String text) {
-        if (text == null || text.isBlank()) return false;
-        String clean = text.toLowerCase().trim();
-        if (GREETING_OR_HELP_COMMANDS.contains(clean)) {
-            return true;
-        }
-        return clean.startsWith("olá") || clean.startsWith("ola") || clean.startsWith("oi ")
-                || clean.startsWith("bom dia") || clean.startsWith("boa tarde") || clean.startsWith("boa noite")
-                || clean.startsWith("ajuda") || clean.startsWith("help");
-    }
+    private void startReviewMode(ChatSessionState session) {
+        Student student = loadStudent(session);
+        List<RepetitionSchedule> pending = findPendingReviews(student.getId());
 
-    private void handleExitCommand(ChatSession session, String phoneNumber) {
-        log.info("[Orchestrator] Comando de saída (Exit Intent) recebido de [{}]", phoneNumber);
-        session.setCurrentState(ChatState.MAIN_MENU);
-        session.setCurrentFlashcard(null);
-        chatSessionRepository.save(session);
+        if (pending.isEmpty()) {
+            transitionTo(session, ChatState.MAIN_MENU);
+            send(session, """
+                    🎉 *Nenhuma revisão pendente por hoje!*
 
-        String exitMsg = """
-                👋 *Até logo!* Sua sessão de estudos foi finalizada com sucesso.
-
-                Sempre que quiser voltar a estudar, revisar seus flashcards ou tirar dúvidas com o tutor, basta enviar uma mensagem! 🚀📚""";
-
-        uazapiClientService.sendTextMessage(phoneNumber, exitMsg);
-    }
-
-    private void handleGlobalReset(ChatSession session, String phoneNumber) {
-        log.info("[Orchestrator] Comando global de reset recebido de [{}]", phoneNumber);
-        session.setCurrentState(ChatState.MAIN_MENU);
-        session.setCurrentFlashcard(null);
-        chatSessionRepository.save(session);
-        sendMainMenuMessage(phoneNumber);
-    }
-
-    private void handleNewState(ChatSession session, String phoneNumber) {
-        log.info("[Orchestrator] Novo contato detectado: [{}]", phoneNumber);
-        session.setCurrentState(ChatState.MAIN_MENU);
-        chatSessionRepository.save(session);
-
-        String welcomeMsg = """
-                👋 *Olá! Bem-vindo ao Chatbot MMEEBB UNIPAM!*
-                Seu assistente inteligente de repetição espaçada e estudos médicos.
-
-                📋 *Menu Principal*
-                *1* - 📚 Modo Revisão MMEEBB
-                *2* - 💡 Modo Dúvidas (RAG Global)
-
-                _Digite o número da opção desejada para começar._""";
-
-        uazapiClientService.sendTextMessage(phoneNumber, welcomeMsg);
-    }
-
-    private void handleMainMenuState(ChatSession session, String phoneNumber, String rawText, String lowerText) {
-        if (isGreetingOrHelpCommand(lowerText)) {
-            sendMainMenuMessage(phoneNumber);
-        } else if ("1".equals(rawText) || lowerText.contains("revis")) {
-            startReviewMode(session, phoneNumber);
-        } else if ("2".equals(rawText) || lowerText.contains("duvid") || lowerText.contains("rag")) {
-            session.setCurrentState(ChatState.RAG_DOUBT_MODE);
-            chatSessionRepository.save(session);
-
-            String ragMsg = """
-                    💡 *Modo Dúvidas e RAG Global Ativado*
-                    
-                    Envie sua pergunta ou dúvida clínica/acadêmica sobre qualquer assunto do banco.
-                    Nosso tutor inteligente consultará todo o acervo para te auxiliar!
-                    
-                    _A qualquer momento, digite *menu* para voltar ao menu principal._""";
-            uazapiClientService.sendTextMessage(phoneNumber, ragMsg);
-        } else if ("3".equals(rawText) || lowerText.contains("trocar") || lowerText.contains("curso")) {
-            startCourseSelection(session, phoneNumber);
-        } else {
-            String invalidMsg = """
-                    ⚠️ *Opção não reconhecida.*
-                    
-                    Por favor, escolha uma das opções válidas:
-                    *1* - 📚 Modo Revisão MMEEBB
-                    *2* - 💡 Modo Dúvidas (RAG Global)
-                    
-                    _Ou digite *menu* para reiniciar o fluxo._""";
-            uazapiClientService.sendTextMessage(phoneNumber, invalidMsg);
-        }
-    }
-
-    private void startReviewMode(ChatSession session, String phoneNumber) {
-        Student student = session.getStudent();
-        List<RepetitionSchedule> pendingList = repetitionScheduleRepository.findPendingReviewsByStudent(
-                student.getId(),
-                LocalDate.now(),
-                ScheduleStatus.PENDING
-        );
-
-        if (pendingList.isEmpty()) {
-            String emptyMsg = """
-                    🎉 *Parabéns!* Você não possui flashcards pendentes para revisão no momento.
-                    
-                    Digite *menu* para ver outras opções de estudo.""";
-            uazapiClientService.sendTextMessage(phoneNumber, emptyMsg);
+                    Seus próximos reforços já estão agendados pelo método MMEEBB. Digite *menu* para ver outras opções.""");
             return;
         }
 
-        RepetitionSchedule firstSchedule = pendingList.get(0);
-        Flashcard firstCard = firstSchedule.getFlashcard();
+        Flashcard first = pending.get(0).getFlashcard();
+        session.setCurrentFlashcardId(first.getId());
+        transitionTo(session, ChatState.REVIEW_MODE);
 
-        session.setCurrentState(ChatState.REVIEW_MODE);
-        session.setCurrentFlashcard(firstCard);
-        chatSessionRepository.save(session);
-
-        sendFlashcardQuestion(phoneNumber, firstCard);
+        send(session, formatFlashcard(first));
     }
 
-    private void handleReviewModeState(ChatSession session, String phoneNumber, String studentAnswer) {
-        Flashcard currentCard = session.getCurrentFlashcard();
-        Student student = session.getStudent();
+    private void handleReviewModeState(ChatSessionState session, String studentAnswer) {
+        Student student = loadStudent(session);
 
-        if (currentCard == null) {
-            log.warn("[Orchestrator] Modo de revisão sem flashcard ativo para [{}]. Resetando ao menu.", phoneNumber);
-            session.setCurrentState(ChatState.MAIN_MENU);
-            chatSessionRepository.save(session);
-            sendMainMenuMessage(phoneNumber);
+        Optional<Flashcard> current = session.getCurrentFlashcardId() != null
+                ? flashcardRepository.findById(session.getCurrentFlashcardId())
+                : Optional.empty();
+
+        if (current.isEmpty()) {
+            log.warn("[Orchestrator] Modo de revisão sem flashcard ativo para [{}]. Voltando ao menu.",
+                    session.getPhoneNumber());
+            session.clearReviewContext();
+            transitionTo(session, ChatState.MAIN_MENU);
+            sendMainMenu(session);
             return;
         }
 
-        // 1. Avalia a resposta do aluno
-        boolean isCorrect = evaluateAnswer(studentAnswer, currentCard);
+        Flashcard card = current.get();
+        AnswerEvaluationDto evaluation = answerEvaluationService.evaluate(studentAnswer, card);
 
         RepetitionSchedule schedule = repetitionScheduleRepository
-                .findByStudentIdAndFlashcardId(student.getId(), currentCard.getId())
-                .orElseGet(() -> mmeebbService.initializeSchedule(student, currentCard, LocalDate.now()));
+                .findByStudentIdAndFlashcardId(student.getId(), card.getId())
+                .orElseGet(() -> mmeebbService.initializeSchedule(student, card, LocalDate.now()));
 
-        RepetitionSchedule updatedSchedule = mmeebbService.processAnswer(schedule, isCorrect, LocalDateTime.now());
-        repetitionScheduleRepository.save(updatedSchedule);
+        RepetitionSchedule updated = mmeebbService.processAnswer(schedule, evaluation.correct(), LocalDateTime.now());
+        repetitionScheduleRepository.save(updated);
 
-        // 2. Constrói feedback do MMEEBB
         StringBuilder feedback = new StringBuilder();
-        if (isCorrect) {
-            feedback.append("✅ *Resposta Correta!*\n")
-                    .append("Intervalo aumentado para *").append(updatedSchedule.getIntervalDays())
-                    .append(" dias* (N=").append(updatedSchedule.getNIndex()).append(").\n\n");
+        if (evaluation.correct()) {
+            feedback.append("✅ *Resposta correta!*\n")
+                    .append("Próximo reforço em *").append(updated.getIntervalDays())
+                    .append(" dia(s)* — IRA 2^").append(updated.getNIndex()).append(".\n\n");
         } else {
-            feedback.append("❌ *Resposta Incorreta!*\n")
-                    .append("Resposta correta: *").append(currentCard.getAnswer()).append("*\n")
+            feedback.append("❌ *Resposta incorreta.*\n")
+                    .append("Gabarito: *").append(card.getAnswer()).append("*\n")
                     .append("Intervalo reiniciado para *1 dia* (N=0) para consolidação.\n\n");
         }
 
-        if (currentCard.getExplanation() != null && !currentCard.getExplanation().isBlank()) {
-            feedback.append("💡 *Explicação:* ").append(currentCard.getExplanation()).append("\n\n");
+        if (evaluation.feedback() != null && !evaluation.feedback().isBlank()) {
+            feedback.append("🧠 *Correção:* ").append(evaluation.feedback()).append("\n\n");
         }
 
-        // 3. Busca próximo flashcard pendente para hoje
-        List<RepetitionSchedule> remainingList = repetitionScheduleRepository.findPendingReviewsByStudent(
-                student.getId(),
-                LocalDate.now(),
-                ScheduleStatus.PENDING
-        );
+        if (card.getExplanation() != null && !card.getExplanation().isBlank()) {
+            feedback.append("💡 *Explicação:* ").append(card.getExplanation()).append("\n\n");
+        }
 
-        // Filtra o card recém-processado que agora tem data futura
-        List<RepetitionSchedule> nextCandidates = remainingList.stream()
-                .filter(s -> !s.getFlashcard().getId().equals(currentCard.getId())
-                        && !s.getNextReviewDate().isAfter(LocalDate.now()))
+        List<RepetitionSchedule> remaining = findPendingReviews(student.getId()).stream()
+                .filter(s -> !s.getFlashcard().getId().equals(card.getId()))
                 .toList();
 
-        if (!nextCandidates.isEmpty()) {
-            Flashcard nextCard = nextCandidates.get(0).getFlashcard();
-            session.setCurrentFlashcard(nextCard);
-            chatSessionRepository.save(session);
-
-            feedback.append("------------------------------------\n\n");
-            feedback.append(formatFlashcardText(nextCard));
-            uazapiClientService.sendTextMessage(phoneNumber, feedback.toString());
+        if (remaining.isEmpty()) {
+            session.clearReviewContext();
+            transitionTo(session, ChatState.MAIN_MENU);
+            feedback.append("🎉 *Todas as revisões de hoje foram concluídas!*\n\nDigite *menu* para voltar.");
         } else {
-            session.setCurrentFlashcard(null);
-            session.setCurrentState(ChatState.MAIN_MENU);
-            chatSessionRepository.save(session);
-
-            feedback.append("🎉 *Parabéns! Todas as revisões de hoje foram concluídas!*\n\n")
-                    .append("Digite *menu* para retornar ao menu principal.");
-            uazapiClientService.sendTextMessage(phoneNumber, feedback.toString());
+            Flashcard next = remaining.get(0).getFlashcard();
+            session.setCurrentFlashcardId(next.getId());
+            chatSessionStore.save(session);
+            feedback.append("------------------------------------\n\n").append(formatFlashcard(next));
         }
+
+        send(session, feedback.toString());
     }
 
-    private boolean evaluateAnswer(String studentAnswer, Flashcard card) {
-        if (studentAnswer == null || studentAnswer.isBlank()) {
-            return false;
-        }
-
-        String cleanedStudent = studentAnswer.trim().replaceAll("\\s+", " ");
-        String cleanedExpected = card.getAnswer().trim().replaceAll("\\s+", " ");
-
-        // Comparação direta sem case-sensitivity
-        if (cleanedStudent.equalsIgnoreCase(cleanedExpected)) {
-            return true;
-        }
-
-        // Comparação de letra em questões de múltipla escolha (ex: "A", "B", "Opção A")
-        if (card.getQuestionType() == QuestionType.MULTIPLE_CHOICE) {
-            String firstLetterStudent = cleanedStudent.replaceAll("(?i)^(letra|opcao|opção)\\s*", "");
-            return firstLetterStudent.equalsIgnoreCase(cleanedExpected);
-        }
-
-        return false;
+    private List<RepetitionSchedule> findPendingReviews(java.util.UUID studentId) {
+        return repetitionScheduleRepository.findPendingReviewsByStudent(
+                studentId, LocalDate.now(), ScheduleStatus.PENDING);
     }
 
-    private void handleRagDoubtModeState(ChatSession session, String phoneNumber, String questionText) {
-        log.info("[Orchestrator] Dúvida RAG recebida de [{}]: \"{}\"", phoneNumber, questionText);
+    private long countPendingReviews(java.util.UUID studentId) {
+        return repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(studentId, LocalDate.now());
+    }
 
-        Subject currentSubject = session.getSelectedSubject();
-        String subjectHeader = (currentSubject != null) ? "📖 *" + currentSubject.getName() + "*" : "🌐 *Acervo Geral*";
+    // =========================================================================
+    // Modo dúvidas (RAG)
+    // =========================================================================
 
-        // Modo RAG Global: Consulta todo o acervo de conhecimento/questões indexadas no pgvector
-        String ragAnswer = subjectRagService.answerDoubt(questionText, null);
+    private void handleRagDoubtModeState(ChatSessionState session, String questionText) {
+        answerDoubt(session, questionText);
+    }
 
-        String formattedMessage = String.format("""
+    private void answerDoubt(ChatSessionState session, String questionText) {
+        log.info("[Orchestrator] Dúvida RAG de [{}] (disciplina {}): \"{}\"",
+                session.getPhoneNumber(), session.getSelectedSubjectId(), questionText);
+
+        String answer = subjectRagService.answerDoubt(questionText, session.getSelectedSubjectId());
+
+        String header = Optional.ofNullable(session.getSelectedSubjectId())
+                .flatMap(subjectRepository::findById)
+                .map(subject -> "📖 *" + subject.getName() + "*")
+                .orElse("🌐 *Acervo geral*");
+
+        send(session, String.format("""
                 🤖 *Tutor Virtual UNIPAM* (%s)
 
                 %s
 
                 ------------------------------------
-                _Envie outra dúvida ou digite *menu* para voltar ao menu principal._""",
-                subjectHeader, ragAnswer);
-
-        uazapiClientService.sendTextMessage(phoneNumber, formattedMessage);
+                _Envie outra dúvida ou digite *menu* para voltar._""", header, answer));
     }
 
-    private void startCourseSelection(ChatSession session, String phoneNumber) {
-        List<Course> activeCourses = courseRepository.findByActiveTrue();
-        if (activeCourses.isEmpty()) {
-            String emptyCoursesMsg = "⚠️ Não há cursos cadastrados no momento.\n\nDigite *menu* para voltar.";
-            uazapiClientService.sendTextMessage(phoneNumber, emptyCoursesMsg);
+    // =========================================================================
+    // Troca de curso / disciplina
+    // =========================================================================
+
+    private void startCourseSelection(ChatSessionState session) {
+        List<Course> courses = courseRepository.findByActiveTrue();
+        if (courses.isEmpty()) {
+            send(session, "⚠️ Não há cursos cadastrados no momento.\n\nDigite *menu* para voltar.");
             return;
         }
 
-        session.setCurrentState(ChatState.SELECTING_COURSE);
-        chatSessionRepository.save(session);
-
-        StringBuilder sb = new StringBuilder("🎓 *Selecione seu Curso:*\n\n");
-        for (int i = 0; i < activeCourses.size(); i++) {
-            sb.append("*").append(i + 1).append("* - ").append(activeCourses.get(i).getName()).append("\n");
-        }
-        sb.append("\n_Digite o número da opção desejada ou *menu* para cancelar._");
-
-        uazapiClientService.sendTextMessage(phoneNumber, sb.toString());
+        transitionTo(session, ChatState.SELECTING_COURSE);
+        send(session, "🎓 *Selecione o curso:*\n\n"
+                + numberedList(courses.stream().map(Course::getName).toList())
+                + "\n_Ou digite *menu* para cancelar._");
     }
 
-    private void handleSelectingCourseState(ChatSession session, String phoneNumber, String input) {
-        List<Course> activeCourses = courseRepository.findByActiveTrue();
-        try {
-            int selectedIndex = Integer.parseInt(input.trim()) - 1;
-            if (selectedIndex >= 0 && selectedIndex < activeCourses.size()) {
-                Course chosenCourse = activeCourses.get(selectedIndex);
-                session.setSelectedCourse(chosenCourse);
+    private void handleSelectingCourseState(ChatSessionState session, String rawText) {
+        List<Course> courses = courseRepository.findByActiveTrue();
 
-                List<Subject> activeSubjects = subjectRepository.findByCourseIdAndActiveTrue(chosenCourse.getId());
-                if (activeSubjects.isEmpty()) {
-                    session.setCurrentState(ChatState.MAIN_MENU);
-                    chatSessionRepository.save(session);
-                    uazapiClientService.sendTextMessage(phoneNumber, "✅ Curso *" + chosenCourse.getName() + "* selecionado!\n(Nenhuma disciplina vinculada encontrada).\n\nRetornando ao Menu Principal...");
-                    sendMainMenuMessage(phoneNumber);
-                    return;
-                }
-
-                session.setCurrentState(ChatState.SELECTING_SUBJECT);
-                chatSessionRepository.save(session);
-
-                StringBuilder sb = new StringBuilder("📖 *Selecione a Disciplina do Curso " + chosenCourse.getName() + ":*\n\n");
-                for (int i = 0; i < activeSubjects.size(); i++) {
-                    sb.append("*").append(i + 1).append("* - ").append(activeSubjects.get(i).getName()).append("\n");
-                }
-                sb.append("\n_Digite o número da disciplina desejada ou *menu* para cancelar._");
-                uazapiClientService.sendTextMessage(phoneNumber, sb.toString());
-                return;
-            }
-        } catch (NumberFormatException ignored) {
-            // Entrada não numérica
-        }
-
-        uazapiClientService.sendTextMessage(phoneNumber, "⚠️ Número de curso inválido. Digite um número da lista ou envie *menu* para voltar.");
-    }
-
-    private void handleSelectingSubjectState(ChatSession session, String phoneNumber, String input) {
-        Course currentCourse = session.getSelectedCourse();
-        if (currentCourse == null) {
-            session.setCurrentState(ChatState.MAIN_MENU);
-            chatSessionRepository.save(session);
-            sendMainMenuMessage(phoneNumber);
+        Optional<Course> chosen = parseSelection(rawText, courses);
+        if (chosen.isEmpty()) {
+            send(session, "⚠️ Número de curso inválido. Escolha um da lista ou digite *menu* para voltar.");
             return;
         }
 
-        List<Subject> activeSubjects = subjectRepository.findByCourseIdAndActiveTrue(currentCourse.getId());
-        try {
-            int selectedIndex = Integer.parseInt(input.trim()) - 1;
-            if (selectedIndex >= 0 && selectedIndex < activeSubjects.size()) {
-                Subject chosenSubject = activeSubjects.get(selectedIndex);
-                session.setSelectedSubject(chosenSubject);
-                session.setCurrentState(ChatState.MAIN_MENU);
-                chatSessionRepository.save(session);
+        session.setSelectedCourseId(chosen.get().getId());
+        session.setSelectedSubjectId(null);
 
-                String successMsg = "✅ Disciplina *" + chosenSubject.getName() + "* selecionada com sucesso!\n\n" +
-                        "📋 *Menu Principal - Chatbot MMEEBB*\n\n" +
-                        "Escolha uma das opções abaixo:\n" +
-                        "*1* - 📚 Modo Revisão MMEEBB\n" +
-                        "*2* - 💡 Modo Dúvidas (RAG)\n" +
-                        "*3* - 🔄 Trocar Disciplina/Curso\n\n" +
-                        "_Digite o número da opção desejada ou *sair* para finalizar._";
-                uazapiClientService.sendTextMessage(phoneNumber, successMsg);
-                return;
-            }
-        } catch (NumberFormatException ignored) {
-            // Entrada não numérica
+        List<Subject> subjects = subjectRepository.findByCourseIdAndActiveTrue(chosen.get().getId());
+        if (subjects.isEmpty()) {
+            transitionTo(session, ChatState.MAIN_MENU);
+            send(session, "✅ Curso *" + chosen.get().getName()
+                    + "* selecionado.\n_(Nenhuma disciplina vinculada encontrada.)_\n\n" + menuBody());
+            return;
         }
 
-        uazapiClientService.sendTextMessage(phoneNumber, "⚠️ Número de disciplina inválido. Digite um número da lista ou envie *menu* para voltar.");
+        transitionTo(session, ChatState.SELECTING_SUBJECT);
+        send(session, "📖 *Selecione a disciplina de " + chosen.get().getName() + ":*\n\n"
+                + numberedList(subjects.stream().map(Subject::getName).toList())
+                + "\n_Ou digite *menu* para cancelar._");
     }
 
-    private void sendFlashcardQuestion(String phoneNumber, Flashcard card) {
-        String message = formatFlashcardText(card);
-        uazapiClientService.sendTextMessage(phoneNumber, message);
+    private void handleSelectingSubjectState(ChatSessionState session, String rawText) {
+        if (session.getSelectedCourseId() == null) {
+            transitionTo(session, ChatState.MAIN_MENU);
+            sendMainMenu(session);
+            return;
+        }
+
+        List<Subject> subjects = subjectRepository.findByCourseIdAndActiveTrue(session.getSelectedCourseId());
+
+        Optional<Subject> chosen = parseSelection(rawText, subjects);
+        if (chosen.isEmpty()) {
+            send(session, "⚠️ Número de disciplina inválido. Escolha um da lista ou digite *menu* para voltar.");
+            return;
+        }
+
+        session.setSelectedSubjectId(chosen.get().getId());
+        transitionTo(session, ChatState.MAIN_MENU);
+
+        send(session, "✅ Disciplina *" + chosen.get().getName() + "* selecionada!\n\n" + menuBody());
     }
 
-    private String formatFlashcardText(Flashcard card) {
+    // =========================================================================
+    // Comandos globais
+    // =========================================================================
+
+    private void handleExitCommand(ChatSessionState session) {
+        log.info("[Orchestrator] Comando de saída recebido de [{}]", session.getPhoneNumber());
+        session.clearReviewContext();
+        transitionTo(session, ChatState.MAIN_MENU);
+
+        send(session, """
+                👋 *Até logo!* Sua sessão de estudos foi finalizada.
+
+                Quando quiser voltar a revisar ou tirar uma dúvida, é só mandar uma mensagem. 🚀📚""");
+    }
+
+    private void handleGlobalReset(ChatSessionState session) {
+        log.info("[Orchestrator] Reset global recebido de [{}]", session.getPhoneNumber());
+        session.clearReviewContext();
+        transitionTo(session, ChatState.MAIN_MENU);
+        sendMainMenu(session);
+    }
+
+    // =========================================================================
+    // Auxiliares
+    // =========================================================================
+
+    private void transitionTo(ChatSessionState session, ChatState newState) {
+        session.setCurrentState(newState);
+        chatSessionStore.save(session);
+    }
+
+    private void send(ChatSessionState session, String message) {
+        uazapiClientService.sendTextMessage(session.getPhoneNumber(), message);
+    }
+
+    private void sendMainMenu(ChatSessionState session) {
+        send(session, menuBody());
+    }
+
+    private String menuBody() {
+        return """
+                📋 *Menu Principal — Chatbot MMEEBB*
+
+                *1* - 📚 Revisar (método MMEEBB)
+                *2* - 💡 Tirar uma dúvida
+                *3* - 🔄 Trocar curso/disciplina
+
+                _Digite o número, escreva o que precisa ou envie *sair* para encerrar._""";
+    }
+
+    private String formatFlashcard(Flashcard card) {
         StringBuilder sb = new StringBuilder();
         sb.append("📚 *Revisão MMEEBB*\n");
         sb.append("🏷️ *Tópico:* ").append(card.getTopic()).append("\n\n");
@@ -493,15 +612,38 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         return sb.toString();
     }
 
-    private void sendMainMenuMessage(String phoneNumber) {
-        String menuMsg = """
-                📋 *Menu Principal - Chatbot MMEEBB*
-                
-                Escolha uma das opções abaixo:
-                *1* - 📚 Modo Revisão MMEEBB
-                *2* - 💡 Modo Dúvidas (RAG Global)
-                
-                _Digite o número da opção desejada ou *sair* para finalizar._""";
-        uazapiClientService.sendTextMessage(phoneNumber, menuMsg);
+    private String numberedList(List<String> labels) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < labels.size(); i++) {
+            sb.append("*").append(i + 1).append("* - ").append(labels.get(i)).append("\n");
+        }
+        return sb.toString();
+    }
+
+    private <T> Optional<T> parseSelection(String input, List<T> options) {
+        Integer index = parsePositiveInt(input);
+        if (index == null || index > options.size()) {
+            return Optional.empty();
+        }
+        return Optional.of(options.get(index - 1));
+    }
+
+    private Integer parsePositiveInt(String input) {
+        if (input == null) {
+            return null;
+        }
+        try {
+            int value = Integer.parseInt(input.trim());
+            return value >= 1 ? value : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String firstName(String fullName) {
+        if (fullName == null || fullName.isBlank()) {
+            return "Estudante";
+        }
+        return fullName.trim().split("\\s+")[0];
     }
 }

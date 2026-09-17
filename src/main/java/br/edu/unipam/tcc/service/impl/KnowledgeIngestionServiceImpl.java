@@ -1,8 +1,13 @@
 package br.edu.unipam.tcc.service.impl;
 
+import br.edu.unipam.tcc.dto.KnowledgeIngestRequestDto;
+import br.edu.unipam.tcc.exception.BusinessException;
+import br.edu.unipam.tcc.exception.ResourceNotFoundException;
 import br.edu.unipam.tcc.service.KnowledgeIngestionService;
 import br.edu.unipam.tcc.entity.Flashcard;
+import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
+import br.edu.unipam.tcc.repository.SubjectRepository;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
 import dev.langchain4j.data.document.DocumentSplitter;
@@ -38,19 +43,65 @@ public class KnowledgeIngestionServiceImpl implements KnowledgeIngestionService 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final FlashcardRepository flashcardRepository;
+    private final SubjectRepository subjectRepository;
     private final DocumentParser documentParser;
     private final DocumentSplitter documentSplitter;
 
     public KnowledgeIngestionServiceImpl(
             EmbeddingModel embeddingModel,
             EmbeddingStore<TextSegment> embeddingStore,
-            FlashcardRepository flashcardRepository
+            FlashcardRepository flashcardRepository,
+            SubjectRepository subjectRepository
     ) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.flashcardRepository = flashcardRepository;
+        this.subjectRepository = subjectRepository;
         this.documentParser = new ApacheTikaDocumentParser();
         this.documentSplitter = DocumentSplitters.recursive(CHUNK_MAX_TOKENS, CHUNK_OVERLAP_TOKENS);
+    }
+
+    @Override
+    public int ingestContent(KnowledgeIngestRequestDto request) {
+        Subject subject = subjectRepository.findById(request.subjectId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Disciplina com ID " + request.subjectId() + " não encontrada."));
+
+        if (!subject.getCourse().getId().equals(request.courseId())) {
+            throw new BusinessException(String.format(
+                    "A disciplina %d pertence ao curso %d, e não ao curso %d informado no payload.",
+                    subject.getId(), subject.getCourse().getId(), request.courseId()));
+        }
+
+        log.info("[KnowledgeIngestion] Ingestão por payload — Curso: {}, Disciplina: {}, Tópico: \"{}\"",
+                request.courseId(), subject.getName(), request.topic());
+
+        String text = (request.title() != null && !request.title().isBlank())
+                ? request.title().trim() + "\n\n" + request.content().trim()
+                : request.content().trim();
+
+        List<TextSegment> segments = documentSplitter.split(Document.from(text));
+        for (TextSegment segment : segments) {
+            segment.metadata().put("course_id", request.courseId().toString());
+            segment.metadata().put("subject_id", request.subjectId().toString());
+            segment.metadata().put("topic", request.topic());
+            segment.metadata().put("source", request.title() != null && !request.title().isBlank()
+                    ? request.title().trim()
+                    : "payload");
+        }
+
+        try {
+            Response<List<Embedding>> embeddingResponse = embeddingModel.embedAll(segments);
+            embeddingStore.addAll(embeddingResponse.content(), segments);
+        } catch (Exception ex) {
+            log.error("[KnowledgeIngestion] Falha ao indexar conteúdo do payload: {}", ex.getMessage(), ex);
+            throw new BusinessException(
+                    "Falha ao gerar embeddings ou salvar no pgvector. Verifique a chave GEMINI_API_KEY e o banco: "
+                            + ex.getMessage(), ex);
+        }
+
+        log.info("[KnowledgeIngestion] {} segmento(s) indexado(s) a partir do payload.", segments.size());
+        return segments.size();
     }
 
     @Override

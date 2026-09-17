@@ -1,7 +1,9 @@
 package br.edu.unipam.tcc.controller;
 
+import br.edu.unipam.tcc.dto.KnowledgeIngestRequestDto;
 import br.edu.unipam.tcc.dto.RagSyncResponseDto;
 import br.edu.unipam.tcc.service.KnowledgeIngestionService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -28,6 +30,17 @@ public class AdminRagController {
         return ResponseEntity.ok(new RagSyncResponseDto(
                 totalIngested,
                 String.format("Sincronização concluída com sucesso! %d flashcard(s) indexado(s) no pgvector para o RAG.", totalIngested)
+        ));
+    }
+
+    @PostMapping("/ingest")
+    public ResponseEntity<RagSyncResponseDto> ingestContent(@Valid @RequestBody KnowledgeIngestRequestDto request) {
+        log.info("[AdminRagController] Ingestão por payload no RAG (Curso: {}, Matéria: {}, Tópico: \"{}\")",
+                request.courseId(), request.subjectId(), request.topic());
+        int totalIngested = knowledgeIngestionService.ingestContent(request);
+        return ResponseEntity.ok(new RagSyncResponseDto(
+                totalIngested,
+                String.format("Conteúdo indexado com sucesso! %d segmento(s) gravado(s) no pgvector.", totalIngested)
         ));
     }
 

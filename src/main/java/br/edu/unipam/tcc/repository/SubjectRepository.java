@@ -20,5 +20,7 @@ public interface SubjectRepository extends JpaRepository<Subject, Long> {
 
     Optional<Subject> findByCourseIdAndCode(Long courseId, String code);
 
+    List<Subject> findByCourseIdAndActiveTrueAndNameContainingIgnoreCase(Long courseId, String name);
+
     boolean existsByCourseIdAndCode(Long courseId, String code);
 }

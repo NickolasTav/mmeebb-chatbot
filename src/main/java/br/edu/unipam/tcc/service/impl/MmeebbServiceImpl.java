@@ -60,7 +60,9 @@ public class MmeebbServiceImpl implements MmeebbService {
 
         schedule.setRepetitionCount(schedule.getRepetitionCount() + 1);
         schedule.setLastReviewedAt(answeredAt);
-        schedule.setStatus(ScheduleStatus.COMPLETED);
+        // O agendamento permanece PENDING: a repetição espaçada é cíclica e o card
+        // volta a ser elegível quando nextReviewDate chegar. COMPLETED encerraria o ciclo.
+        schedule.setStatus(ScheduleStatus.PENDING);
 
         if (isCorrect) {
             int newN = Math.min(schedule.getNIndex() + 1, MAX_N_INDEX);

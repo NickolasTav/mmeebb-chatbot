@@ -141,15 +141,37 @@ flowchart TB
 
 ### 4.1. Máquina de Estados Finita (FSM) & Comandos Conversacionais
 
-O fluxo conversacional é gerenciado por uma **FSM determinística** (`ChatFlowOrchestrator`) com separação clara de intenções:
+O fluxo conversacional é gerenciado por uma **FSM determinística** (`ChatFlowOrchestrator`) cujo estado vive no **Redis**, chaveado pelo número de WhatsApp e com TTL de expiração automática. O PostgreSQL guarda apenas o que é durável (estudante, matrícula e agendamentos), eliminando a escrita relacional a cada troca de estado.
 
-| Intenção / Ação | Gatilhos Aceitos | Comportamento no WhatsApp |
+#### Primeiro contato: formulário de cadastro
+
+O número de WhatsApp é a chave única do estudante. Quando um número desconhecido envia a primeira mensagem, o bot aplica um formulário de três etapas antes de liberar o menu:
+
+| Etapa | Estado da FSM | Campo coletado |
 | :--- | :--- | :--- |
-| **👋 Saudações & Ajuda** | `ola`, `olá`, `oi`, `bom dia`, `boa tarde`, `boa noite`, `ajuda`, `help`, `opções` | Envia as boas-vindas ou reexibe as orientações do sistema. |
-| **📋 Menu Principal** | `menu`, `inicio`, `início`, `começo`, `reset`, `/menu`, `/start` | Reseta a sessão para o estado `MAIN_MENU` e exibe o menu com as opções de estudo. |
-| **📚 1 - Revisão MMEEBB** | `1`, `revisar`, `revisão`, `questão`, `estudar` | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
-| **💡 2 - Modo Dúvidas (RAG Global)** | `2`, `duvidas`, `dúvidas`, `rag`, perguntas livres | Consulta todo o acervo vetorial (`pgvector`) sem restrição de matéria, respondendo dúvidas via Gemini. |
-| **🚪 Encerramento (Exit Intent)** | `sair`, `tchau`, `encerrar`, `finalizar`, `fim`, `até mais`, `flw`, `adeus`, `/sair` | **Finaliza a sessão com mensagem amigável de despedida** e limpa cards ativos, sem reenviar o menu em loop. |
+| 1 de 3 | `AWAITING_FULL_NAME` | Nome completo (exige nome e sobrenome) |
+| 2 de 3 | `AWAITING_RA` | RA — aceita `pular`, e recusa RA já vinculado a outro número |
+| 3 de 3 | `AWAITING_COURSE` → `AWAITING_ACADEMIC_PERIOD` | Curso e período letivo |
+
+Ao concluir, o sistema grava `tb_student` + `tb_student_course` e **inicializa os agendamentos MMEEBB** de todos os flashcards ativos do curso, deixando a primeira rodada disponível imediatamente. Números já cadastrados nunca repetem o formulário, mesmo após a sessão expirar no Redis.
+
+#### Após o cadastro: menu fixo + texto livre
+
+O estudante pode usar os números do menu ou **escrever livremente**. Texto livre passa por um classificador de intenção (Gemini) que também extrai a disciplina citada e restringe a busca vetorial a ela:
+
+| Intenção | Gatilhos | Comportamento |
+| :--- | :--- | :--- |
+| **📚 START_REVIEW** | `1`, ou texto livre como *"quero estudar um pouco"* | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
+| **💡 ASK_DOUBT** | `2`, ou qualquer pergunta de conteúdo | Responde via RAG. Se a mensagem citar uma disciplina (*"dúvida de cardiologia"*), a busca é particionada por `subject_id`. |
+| **🔄 CHANGE_SUBJECT** | `3`, ou *"quero trocar de matéria"* | Abre a seleção de curso e disciplina. |
+| **📋 SHOW_MENU** | `menu`, `oi`, `bom dia`, `ajuda` | Reexibe o menu principal. |
+| **🚪 EXIT** | `sair`, `tchau`, `encerrar`, `flw`, `/sair` | Finaliza a sessão com despedida e limpa o card ativo. |
+
+> Durante o formulário de cadastro os comandos globais ficam desativados: `menu` ali é uma resposta possível do estudante, não um comando de reset.
+
+#### Correção das respostas
+
+Múltipla escolha é resolvida por comparação direta; respostas dissertativas passam por **correção semântica via Gemini**, que aceita o conceito correto expresso com palavras próprias e devolve um comentário pedagógico curto.
 
 ---
 
@@ -251,6 +273,7 @@ erDiagram
 | **Banco Vetorial** | `pgvector` (PostgreSQL extension) | Armazenamento de embeddings semânticos para o RAG |
 | **Migrations** | Flyway | Versionamento e automação do schema SQL |
 | **Mensageria** | RabbitMQ 3 Management | Desacoplamento assíncrono, buffers e proteção anti-ban |
+| **Estado Conversacional** | Redis 7 | FSM do chatbot com TTL, sem escrita relacional por mensagem |
 | **IA / LLM & RAG** | Google Gemini 1.5 Flash + LangChain4j | Preceptor clínico, classificação semântica e RAG |
 | **Parser Universal** | Apache Tika | Extração de texto de PDFs, DOCX e Markdown para ingestão |
 | **Gateway WhatsApp** | Uazapi / UazapiGO | Conexão com o WhatsApp, webhooks e envio de mensagens |
@@ -271,7 +294,7 @@ Na raiz do repositório, execute:
 ```powershell
 docker compose up -d
 ```
-> Isso iniciará o **PostgreSQL 16 com pgvector** na porta `5432` e o **RabbitMQ** nas portas `5672` (AMQP) e `15672` (Painel Web: [http://localhost:15672](http://localhost:15672)).
+> Isso iniciará o **PostgreSQL 16 com pgvector** na porta `5432`, o **RabbitMQ** nas portas `5672` (AMQP) e `15672` (Painel Web: [http://localhost:15672](http://localhost:15672)) e o **Redis 7** na porta `6379`, usado para o estado conversacional do chatbot.
 
 ### Passo 2: Configurar Variáveis de Ambiente (.env) e Rodar o Backend
 Copie o modelo de ambiente ou edite o arquivo `.env` na raiz do projeto:
@@ -310,6 +333,24 @@ curl.exe -i -X POST "http://localhost:8080/api/admin/rag/sync-flashcards" -H "X-
 ```
 *(Ou passe `?courseId=1` ou `?subjectId=1` para sincronizar uma disciplina específica).*
 
+#### Cadastrando conteúdo por payload
+
+Para indexar material novo sem depender de arquivos no servidor, envie o conteúdo no corpo da requisição. Curso, disciplina e tópico viram **metadados do embedding**, o que permite particionar a busca vetorial por matéria:
+
+```powershell
+curl.exe -i -X POST "http://localhost:8080/api/admin/rag/ingest" `
+  -H "X-API-KEY: teste" -H "Content-Type: application/json" `
+  -d '{
+        "courseId": 1,
+        "subjectId": 10,
+        "topic": "Arritmias",
+        "title": "Manejo da Fibrilação Atrial",
+        "content": "Na FA com instabilidade hemodinâmica, a conduta é a cardioversão elétrica sincronizada..."
+      }'
+```
+
+O texto é segmentado (300 tokens, overlap de 30) e cada trecho recebe `course_id`, `subject_id` e `topic`. A API valida que a disciplina informada pertence de fato ao curso informado.
+
 ### Passo 4: Expor a Porta Local via Ngrok
 Em um terminal separado:
 ```powershell
@@ -333,6 +374,11 @@ No painel da Uazapi, configure:
 | `SPRING_DATASOURCE_PASSWORD` | `postgres` | Senha do banco de dados |
 | `SPRING_RABBITMQ_HOST` | `localhost` | Host do RabbitMQ |
 | `SPRING_RABBITMQ_PORT` | `5672` | Porta AMQP do RabbitMQ |
+| `SPRING_REDIS_HOST` | `localhost` | Host do Redis (estado conversacional) |
+| `SPRING_REDIS_PORT` | `6379` | Porta do Redis |
+| `SPRING_REDIS_PASSWORD` | *(Vazio)* | Senha do Redis, se houver |
+| `MMEEBB_SESSION_TTL_MINUTES` | `60` | Tempo de expiração da sessão conversacional no Redis |
+| `MMEEBB_SCHEDULER_CRON` | `0 0 8 * * *` | Cron das notificações diárias de revisões pendentes |
 | `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi |
 | `UAZAPI_API_KEY` | *(Vazio)* | Token/Chave de autenticação da Uazapi |
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
@@ -363,7 +409,9 @@ Para executar a suíte completa de testes:
 ### Resultados Atuais:
 - **Total de Testes Unitários:** 171
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 0 Ignorados)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões, Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG, Consumidores RabbitMQ, Notificações Ativas Push e Controladores Administrativos.
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas, Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG, Consumidores RabbitMQ, Notificações Ativas Push e Controladores Administrativos.
+
+> O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
 
 ---
 

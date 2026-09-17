@@ -1,13 +1,26 @@
 package br.edu.unipam.tcc.service;
 
+import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
+import br.edu.unipam.tcc.dto.IntentResultDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
-import br.edu.unipam.tcc.entity.*;
+import br.edu.unipam.tcc.entity.Course;
+import br.edu.unipam.tcc.entity.Flashcard;
+import br.edu.unipam.tcc.entity.RepetitionSchedule;
+import br.edu.unipam.tcc.entity.Student;
+import br.edu.unipam.tcc.entity.StudentCourse;
+import br.edu.unipam.tcc.entity.Subject;
+import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
-import br.edu.unipam.tcc.entity.enums.DifficultyLevel;
-import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
-import br.edu.unipam.tcc.repository.*;
+import br.edu.unipam.tcc.repository.CourseRepository;
+import br.edu.unipam.tcc.repository.FlashcardRepository;
+import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
+import br.edu.unipam.tcc.repository.StudentCourseRepository;
+import br.edu.unipam.tcc.repository.StudentRepository;
+import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.ChatFlowOrchestratorImpl;
+import br.edu.unipam.tcc.session.ChatSessionState;
+import br.edu.unipam.tcc.session.ChatSessionStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,547 +29,428 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class ChatFlowOrchestratorImplTest {
 
-    @Mock
-    private ChatSessionRepository chatSessionRepository;
+    private static final String PHONE = "5534999998888";
+    private static final String JID = PHONE + "@s.whatsapp.net";
 
-    @Mock
-    private StudentRepository studentRepository;
+    @Mock private ChatSessionStore chatSessionStore;
+    @Mock private StudentRepository studentRepository;
+    @Mock private StudentCourseRepository studentCourseRepository;
+    @Mock private CourseRepository courseRepository;
+    @Mock private SubjectRepository subjectRepository;
+    @Mock private FlashcardRepository flashcardRepository;
+    @Mock private RepetitionScheduleRepository repetitionScheduleRepository;
+    @Mock private MmeebbService mmeebbService;
+    @Mock private UazapiClientService uazapiClientService;
+    @Mock private SubjectRagService subjectRagService;
+    @Mock private IntentRouterService intentRouterService;
+    @Mock private AnswerEvaluationService answerEvaluationService;
+    @Mock private StudentOnboardingService studentOnboardingService;
 
-    @Mock
-    private CourseRepository courseRepository;
+    @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
 
-    @Mock
-    private SubjectRepository subjectRepository;
-
-    @Mock
-    private FlashcardRepository flashcardRepository;
-
-    @Mock
-    private RepetitionScheduleRepository repetitionScheduleRepository;
-
-    @Mock
-    private MmeebbService mmeebbService;
-
-    @Mock
-    private UazapiClientService uazapiClientService;
-
-    @Mock
-    private SubjectRagService subjectRagService;
-
-    @InjectMocks
-    private ChatFlowOrchestratorImpl orchestrator;
-
-    private Student mockStudent;
-    private ChatSession mockSession;
-    private Flashcard mockFlashcard;
-    private RepetitionSchedule mockSchedule;
-    private final String phone = "5534999998888";
+    private Student student;
+    private Course course;
+    private Subject subject;
+    private Flashcard flashcard;
 
     @BeforeEach
     void setUp() {
-        mockStudent = Student.builder()
-                .id(UUID.randomUUID())
-                .phoneNumber(phone)
-                .fullName("Estudante Teste")
+        course = Course.builder().code("MED").name("Medicina").active(true).build();
+        course.setId(1L);
+
+        subject = Subject.builder().course(course).code("CARD").name("Cardiologia").active(true).build();
+        subject.setId(10L);
+
+        student = Student.builder()
+                .phoneNumber(PHONE)
+                .fullName("Maria Silva")
                 .active(true)
                 .build();
+        student.setId(UUID.randomUUID());
 
-        mockSession = ChatSession.builder()
-                .id(UUID.randomUUID())
-                .student(mockStudent)
-                .phoneNumber(phone)
-                .currentState(ChatState.MAIN_MENU)
-                .lastInteractionAt(LocalDateTime.now())
+        flashcard = Flashcard.builder()
+                .subject(subject)
+                .topic("Arritmias")
+                .question("Qual a primeira conduta na FA instável?")
+                .answer("Cardioversão elétrica sincronizada")
+                .active(true)
                 .build();
+        flashcard.setId(100L);
+    }
 
-        Subject mockSubject = Subject.builder()
-                .id(1L)
-                .code("CLINICA_MEDICA")
-                .name("Clínica Médica")
-                .build();
+    private UazapiWebhookDto message(String text) {
+        return new UazapiWebhookDto(null, JID, false, text, null, null, "msg-id");
+    }
 
-        mockFlashcard = Flashcard.builder()
-                .id(10L)
-                .subject(mockSubject)
-                .topic("Cardiologia")
-                .questionType(QuestionType.FLASHCARD)
-                .question("Qual a principal causa de ICC?")
-                .answer("Hipertensão Arterial Sistêmica")
-                .explanation("HAS e DAC são as principais causas.")
-                .difficulty(DifficultyLevel.MEDIUM)
-                .build();
-
-        mockSchedule = RepetitionSchedule.builder()
-                .id(100L)
-                .student(mockStudent)
-                .flashcard(mockFlashcard)
-                .nIndex(0)
-                .intervalDays(1)
-                .repetitionCount(0)
-                .consecutiveCorrect(0)
-                .status(ScheduleStatus.PENDING)
-                .nextReviewDate(LocalDate.now())
+    private ChatSessionState registeredSession(ChatState state) {
+        return ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .studentId(student.getId())
+                .selectedCourseId(course.getId())
+                .currentState(state)
                 .build();
     }
 
+    private String lastSentMessage() {
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(uazapiClientService, org.mockito.Mockito.atLeastOnce()).sendTextMessage(eq(PHONE), captor.capture());
+        return captor.getValue();
+    }
+
+    // =========================================================================
+    // Onboarding
+    // =========================================================================
+
     @Test
-    @DisplayName("Deve ignorar mensagem quando payload for nulo ou remetente for a própria instância (fromMe)")
-    void shouldIgnoreNullOrFromMeMessages() {
+    @DisplayName("Deve iniciar o formulário de cadastro pedindo o nome completo no primeiro contato")
+    void shouldStartOnboardingOnFirstContact() {
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.empty());
+        when(studentRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.empty());
+
+        orchestrator.processIncomingMessage(message("oi"));
+
+        ArgumentCaptor<ChatSessionState> captor = ArgumentCaptor.forClass(ChatSessionState.class);
+        verify(chatSessionStore).save(captor.capture());
+
+        assertEquals(ChatState.AWAITING_FULL_NAME, captor.getValue().getCurrentState());
+        assertTrue(lastSentMessage().contains("nome completo"));
+    }
+
+    @Test
+    @DisplayName("Deve recusar nome sem sobrenome e permanecer aguardando o nome completo")
+    void shouldRejectSingleWordName() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_FULL_NAME)
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("Maria"));
+
+        verify(chatSessionStore, never()).save(any());
+        assertEquals(ChatState.AWAITING_FULL_NAME, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("nome completo"));
+    }
+
+    @Test
+    @DisplayName("Deve pular o RA e listar os cursos quando o estudante enviar 'pular'")
+    void shouldSkipRaAndListCourses() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_RA)
+                .draftFullName("Maria Silva")
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(courseRepository.findByActiveTrue()).thenReturn(List.of(course));
+
+        orchestrator.processIncomingMessage(message("pular"));
+
+        assertEquals(ChatState.AWAITING_COURSE, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("Medicina"));
+    }
+
+    @Test
+    @DisplayName("Deve recusar RA já vinculado a outro número de WhatsApp")
+    void shouldRejectRaOwnedByAnotherPhone() {
+        Student other = Student.builder().phoneNumber("5511111111111").fullName("Outro").build();
+        other.setId(UUID.randomUUID());
+
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_RA)
+                .draftFullName("Maria Silva")
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findByRa("12345")).thenReturn(Optional.of(other));
+
+        orchestrator.processIncomingMessage(message("12345"));
+
+        assertEquals(ChatState.AWAITING_RA, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("já está vinculado"));
+    }
+
+    @Test
+    @DisplayName("Deve concluir o cadastro ao receber o período e transicionar para o MAIN_MENU")
+    void shouldCompleteRegistrationOnPeriodInput() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_ACADEMIC_PERIOD)
+                .draftFullName("Maria Silva")
+                .draftRa("12345")
+                .draftCourseId(course.getId())
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentOnboardingService.register(PHONE, "Maria Silva", "12345", course.getId(), 8))
+                .thenReturn(student);
+        when(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(student.getId()), any()))
+                .thenReturn(12L);
+
+        orchestrator.processIncomingMessage(message("8"));
+
+        verify(studentOnboardingService).register(PHONE, "Maria Silva", "12345", course.getId(), 8);
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        assertEquals(student.getId(), session.getStudentId());
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Cadastro concluído"));
+        assertTrue(sent.contains("12"));
+    }
+
+    @Test
+    @DisplayName("Deve recusar período fora da faixa permitida")
+    void shouldRejectInvalidAcademicPeriod() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_ACADEMIC_PERIOD)
+                .draftCourseId(course.getId())
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("99"));
+
+        verify(studentOnboardingService, never()).register(anyString(), anyString(), anyString(), any(), any());
+        assertTrue(lastSentMessage().contains("Período inválido"));
+    }
+
+    @Test
+    @DisplayName("Não deve refazer o formulário quando o telefone já estiver cadastrado e a sessão tiver expirado")
+    void shouldNotRepeatOnboardingForRegisteredPhone() {
+        StudentCourse link = StudentCourse.builder().student(student).course(course).active(true).build();
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.empty());
+        when(studentRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(student));
+        when(studentCourseRepository.findByStudentIdAndActiveTrue(student.getId())).thenReturn(List.of(link));
+        when(intentRouterService.classify("bom dia")).thenReturn(IntentResultDto.of(ChatIntent.SHOW_MENU));
+
+        orchestrator.processIncomingMessage(message("bom dia"));
+
+        verify(studentOnboardingService, never()).register(anyString(), anyString(), anyString(), any(), any());
+        assertTrue(lastSentMessage().contains("Menu Principal"));
+    }
+
+    // =========================================================================
+    // Roteamento por intenção
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve iniciar a revisão quando a intenção classificada for START_REVIEW")
+    void shouldStartReviewWhenIntentIsStartReview() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(intentRouterService.classify("quero estudar um pouco"))
+                .thenReturn(IntentResultDto.of(ChatIntent.START_REVIEW));
+
+        RepetitionSchedule schedule = RepetitionSchedule.builder().student(student).flashcard(flashcard).build();
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of(schedule));
+
+        orchestrator.processIncomingMessage(message("quero estudar um pouco"));
+
+        assertEquals(ChatState.REVIEW_MODE, session.getCurrentState());
+        assertEquals(flashcard.getId(), session.getCurrentFlashcardId());
+        assertTrue(lastSentMessage().contains("Arritmias"));
+    }
+
+    @Test
+    @DisplayName("Deve responder dúvida em texto livre pelo RAG e restringir a busca à disciplina citada")
+    void shouldAnswerFreeTextDoubtScopedToMentionedSubject() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(intentRouterService.classify(anyString()))
+                .thenReturn(new IntentResultDto(ChatIntent.ASK_DOUBT, "cardiologia"));
+        when(subjectRepository.findByCourseIdAndActiveTrueAndNameContainingIgnoreCase(course.getId(), "cardiologia"))
+                .thenReturn(List.of(subject));
+        when(subjectRepository.findById(subject.getId())).thenReturn(Optional.of(subject));
+        when(subjectRagService.answerDoubt(anyString(), eq(subject.getId())))
+                .thenReturn("A cardioversão é indicada na instabilidade.");
+
+        orchestrator.processIncomingMessage(message("tenho uma dúvida de cardiologia sobre fibrilação atrial"));
+
+        verify(subjectRagService).answerDoubt(
+                "tenho uma dúvida de cardiologia sobre fibrilação atrial", subject.getId());
+        assertEquals(ChatState.RAG_DOUBT_MODE, session.getCurrentState());
+        assertEquals(subject.getId(), session.getSelectedSubjectId());
+        assertTrue(lastSentMessage().contains("Cardiologia"));
+    }
+
+    @Test
+    @DisplayName("Deve consultar o acervo geral quando não houver disciplina selecionada na sessão")
+    void shouldQueryGlobalRagWhenNoSubjectSelected() {
+        ChatSessionState session = registeredSession(ChatState.RAG_DOUBT_MODE);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(subjectRagService.answerDoubt(anyString(), eq(null))).thenReturn("Resposta geral.");
+
+        orchestrator.processIncomingMessage(message("o que é sepse?"));
+
+        verify(subjectRagService).answerDoubt("o que é sepse?", null);
+        assertTrue(lastSentMessage().contains("Acervo geral"));
+    }
+
+    @Test
+    @DisplayName("Não deve classificar intenção quando o estudante enviar um número do menu")
+    void shouldSkipIntentClassificationForNumericMenuOption() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("2"));
+
+        verify(intentRouterService, never()).classify(anyString());
+        assertEquals(ChatState.RAG_DOUBT_MODE, session.getCurrentState());
+    }
+
+    // =========================================================================
+    // Modo revisão / motor MMEEBB
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve aceitar resposta dissertativa aprovada na correção semântica e dobrar o intervalo")
+    void shouldAcceptSemanticallyCorrectAnswerAndDoubleInterval() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
+        when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
+                .thenReturn(new AnswerEvaluationDto(true, "Boa! É exatamente a conduta indicada."));
+
+        RepetitionSchedule schedule = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).nIndex(1).intervalDays(2).build();
+        when(repetitionScheduleRepository.findByStudentIdAndFlashcardId(student.getId(), flashcard.getId()))
+                .thenReturn(Optional.of(schedule));
+
+        RepetitionSchedule updated = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).nIndex(2).intervalDays(4)
+                .status(ScheduleStatus.PENDING).build();
+        when(mmeebbService.processAnswer(eq(schedule), eq(true), any())).thenReturn(updated);
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("choque elétrico sincronizado"));
+
+        verify(mmeebbService).processAnswer(eq(schedule), eq(true), any());
+        verify(repetitionScheduleRepository).save(updated);
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Resposta correta"));
+        assertTrue(sent.contains("4 dia(s)"));
+        assertTrue(sent.contains("É exatamente a conduta indicada."));
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Deve reiniciar o intervalo e exibir o gabarito quando a resposta for reprovada")
+    void shouldResetIntervalOnIncorrectAnswer() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
+        when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
+                .thenReturn(AnswerEvaluationDto.rejected());
+
+        RepetitionSchedule schedule = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).nIndex(3).intervalDays(8).build();
+        when(repetitionScheduleRepository.findByStudentIdAndFlashcardId(student.getId(), flashcard.getId()))
+                .thenReturn(Optional.of(schedule));
+
+        RepetitionSchedule updated = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).nIndex(0).intervalDays(1)
+                .status(ScheduleStatus.PENDING).build();
+        when(mmeebbService.processAnswer(eq(schedule), eq(false), any())).thenReturn(updated);
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("massagem cardíaca"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Resposta incorreta"));
+        assertTrue(sent.contains("Cardioversão elétrica sincronizada"));
+    }
+
+    @Test
+    @DisplayName("Deve avisar que não há revisões pendentes e voltar ao menu")
+    void shouldReportNoPendingReviews() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("Nenhuma revisão pendente"));
+    }
+
+    // =========================================================================
+    // Comandos globais
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve encerrar a sessão e limpar o flashcard em curso ao receber 'sair'")
+    void shouldHandleExitCommand() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("sair"));
+
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        assertEquals(null, session.getCurrentFlashcardId());
+        assertTrue(lastSentMessage().contains("Até logo"));
+    }
+
+    @Test
+    @DisplayName("Não deve tratar 'menu' como comando global durante o formulário de cadastro")
+    void shouldNotTreatResetAsGlobalCommandDuringOnboarding() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_FULL_NAME)
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("menu"));
+
+        assertEquals(ChatState.AWAITING_FULL_NAME, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("nome completo"));
+    }
+
+    @Test
+    @DisplayName("Deve ignorar payload nulo e mensagens enviadas pelo próprio bot")
+    void shouldIgnoreNullAndFromMeMessages() {
         orchestrator.processIncomingMessage(null);
-        orchestrator.processIncomingMessage(new UazapiWebhookDto("5534999998888@s.whatsapp.net", true, "Oi", "instancia", "msg-1"));
+        orchestrator.processIncomingMessage(new UazapiWebhookDto(null, JID, true, "oi", null, null, "msg"));
 
-        verifyNoInteractions(chatSessionRepository, uazapiClientService);
-    }
-
-    @Test
-    @DisplayName("Deve criar Student e ChatSession para novo contato e transicionar para MAIN_MENU enviando boas-vindas")
-    void shouldHandleNewContactCreateSessionAndSendWelcomeMenu() {
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "Olá", "instancia", "msg-1");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.empty());
-        when(studentRepository.findByPhoneNumber(phone)).thenReturn(Optional.empty());
-        when(studentRepository.save(any(Student.class))).thenReturn(mockStudent);
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        verify(studentRepository).save(any(Student.class));
-        verify(chatSessionRepository, atLeastOnce()).save(any(ChatSession.class));
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Bem-vindo ao Chatbot MMEEBB"));
-        assertTrue(messageCaptor.getValue().contains("Modo Revisão MMEEBB"));
-    }
-
-    @Test
-    @DisplayName("Deve resetar para MAIN_MENU quando receber comando global como 'menu' ou 'inicio'")
-    void shouldResetToMainMenuWhenGlobalResetCommandReceived() {
-        mockSession.setCurrentState(ChatState.REVIEW_MODE);
-        mockSession.setCurrentFlashcard(mockFlashcard);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "menu", "instancia", "msg-2");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
-        assertNull(mockSession.getCurrentFlashcard());
-        verify(chatSessionRepository).save(mockSession);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Menu Principal"));
-    }
-
-    @Test
-    @DisplayName("Deve finalizar sessão e enviar mensagem de despedida sem menu quando usuário enviar 'sair'")
-    void shouldHandleExitCommandAndSendFarewellWithoutMenuWhenInMainMenu() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-        mockSession.setCurrentFlashcard(null);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "Sair", "instancia", "msg-exit-1");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
-        assertNull(mockSession.getCurrentFlashcard());
-        verify(chatSessionRepository).save(mockSession);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentMessage = messageCaptor.getValue();
-        assertTrue(sentMessage.contains("Até logo"), "Deveria conter 'Até logo' mas foi: " + sentMessage);
-        assertTrue(sentMessage.contains("finalizada") || sentMessage.contains("encerrada"), "Deveria conter status de finalização mas foi: " + sentMessage);
-        assertFalse(sentMessage.contains("Menu Principal"), "NÃO deveria reenviar o Menu Principal");
-    }
-
-    @Test
-    @DisplayName("Deve encerrar revisão ativa e enviar despedida quando usuário enviar 'tchau' no REVIEW_MODE")
-    void shouldHandleExitCommandAndResetSessionWhenInReviewMode() {
-        mockSession.setCurrentState(ChatState.REVIEW_MODE);
-        mockSession.setCurrentFlashcard(mockFlashcard);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "tchau", "instancia", "msg-exit-2");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
-        assertNull(mockSession.getCurrentFlashcard());
-        verify(chatSessionRepository).save(mockSession);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentMessage = messageCaptor.getValue();
-        assertTrue(sentMessage.contains("Até logo"));
-        assertFalse(sentMessage.contains("Menu Principal"));
-    }
-
-    @Test
-    @DisplayName("Deve encerrar sessão com despedida quando usuário enviar '/sair' no RAG_DOUBT_MODE")
-    void shouldHandleExitCommandWhenInRagDoubtMode() {
-        mockSession.setCurrentState(ChatState.RAG_DOUBT_MODE);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "/sair", "instancia", "msg-exit-3");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
-        verify(chatSessionRepository).save(mockSession);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentMessage = messageCaptor.getValue();
-        assertTrue(sentMessage.contains("Até logo"));
-        assertFalse(sentMessage.contains("Menu Principal"));
-    }
-
-    @Test
-    @DisplayName("Deve iniciar MODO_REVISAO_MMEEBB e enviar primeiro flashcard ao selecionar opção 1 no Menu")
-    void shouldTransitionToReviewModeAndSendFirstFlashcardWhenOption1Selected() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "1", "instancia", "msg-3");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(repetitionScheduleRepository.findPendingReviewsByStudent(eq(mockStudent.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
-                .thenReturn(List.of(mockSchedule));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.REVIEW_MODE, mockSession.getCurrentState());
-        assertEquals(mockFlashcard, mockSession.getCurrentFlashcard());
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Revisão MMEEBB"));
-        assertTrue(messageCaptor.getValue().contains("Cardiologia"));
-        assertTrue(messageCaptor.getValue().contains("Qual a principal causa de ICC?"));
-    }
-
-    @Test
-    @DisplayName("Deve avisar quando não houver flashcards pendentes no momento ao selecionar opção 1")
-    void shouldNotifyNoPendingCardsWhenOption1SelectedAndDeckIsEmpty() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "1", "instancia", "msg-4");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(repetitionScheduleRepository.findPendingReviewsByStudent(eq(mockStudent.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
-                .thenReturn(Collections.emptyList());
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("não possui flashcards pendentes"));
-    }
-
-    @Test
-    @DisplayName("Deve processar resposta correta no MODO_REVISAO_MMEEBB, duplicar intervalo e concluir quando sem mais cards")
-    void shouldProcessCorrectAnswerAndCompleteReviewWhenNoMoreCards() {
-        mockSession.setCurrentState(ChatState.REVIEW_MODE);
-        mockSession.setCurrentFlashcard(mockFlashcard);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "Hipertensão Arterial Sistêmica", "instancia", "msg-5");
-
-        RepetitionSchedule updatedSchedule = RepetitionSchedule.builder()
-                .id(100L)
-                .student(mockStudent)
-                .flashcard(mockFlashcard)
-                .nIndex(1)
-                .intervalDays(2)
-                .consecutiveCorrect(1)
-                .repetitionCount(1)
-                .status(ScheduleStatus.PENDING)
-                .nextReviewDate(LocalDate.now().plusDays(2))
-                .build();
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(repetitionScheduleRepository.findByStudentIdAndFlashcardId(mockStudent.getId(), mockFlashcard.getId()))
-                .thenReturn(Optional.of(mockSchedule));
-        when(mmeebbService.processAnswer(eq(mockSchedule), eq(true), any(LocalDateTime.class)))
-                .thenReturn(updatedSchedule);
-        when(repetitionScheduleRepository.findPendingReviewsByStudent(eq(mockStudent.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
-                .thenReturn(Collections.emptyList());
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        verify(repetitionScheduleRepository).save(updatedSchedule);
-        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
-        assertNull(mockSession.getCurrentFlashcard());
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Resposta Correta"));
-        assertTrue(messageCaptor.getValue().contains("2 dias"));
-        assertTrue(messageCaptor.getValue().contains("concluídas"));
-    }
-
-    @Test
-    @DisplayName("Deve processar resposta incorreta no MODO_REVISAO_MMEEBB, resetar intervalo para 1 dia e enviar feedback")
-    void shouldProcessIncorrectAnswerAndResetIntervalToOneDay() {
-        mockSession.setCurrentState(ChatState.REVIEW_MODE);
-        mockSession.setCurrentFlashcard(mockFlashcard);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "Diabetes Mellitus", "instancia", "msg-6");
-
-        RepetitionSchedule updatedSchedule = RepetitionSchedule.builder()
-                .id(100L)
-                .student(mockStudent)
-                .flashcard(mockFlashcard)
-                .nIndex(0)
-                .intervalDays(1)
-                .consecutiveCorrect(0)
-                .repetitionCount(1)
-                .status(ScheduleStatus.PENDING)
-                .nextReviewDate(LocalDate.now().plusDays(1))
-                .build();
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(repetitionScheduleRepository.findByStudentIdAndFlashcardId(mockStudent.getId(), mockFlashcard.getId()))
-                .thenReturn(Optional.of(mockSchedule));
-        when(mmeebbService.processAnswer(eq(mockSchedule), eq(false), any(LocalDateTime.class)))
-                .thenReturn(updatedSchedule);
-        when(repetitionScheduleRepository.findPendingReviewsByStudent(eq(mockStudent.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
-                .thenReturn(Collections.emptyList());
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        verify(repetitionScheduleRepository).save(updatedSchedule);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Resposta Incorreta"));
-        assertTrue(messageCaptor.getValue().contains("Hipertensão Arterial Sistêmica"));
-        assertTrue(messageCaptor.getValue().contains("1 dia"));
-    }
-
-    @Test
-    @DisplayName("Deve transicionar para MODO_RAG_DUVIDAS ao selecionar opção 2 no Menu")
-    void shouldTransitionToRagDoubtModeWhenOption2Selected() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "2", "instancia", "msg-7");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.RAG_DOUBT_MODE, mockSession.getCurrentState());
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Modo Dúvidas e RAG"));
-    }
-
-    @Test
-    @DisplayName("Deve transicionar para SELECTING_COURSE e listar cursos ativos ao selecionar opção 3 no Menu")
-    void shouldTransitionToSelectingCourseWhenOption3Selected() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        Course course1 = Course.builder().id(1L).name("Medicina").code("MED").build();
-        Course course2 = Course.builder().id(2L).name("Sistemas de Informação").code("SI").build();
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "3", "instancia", "msg-8");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(courseRepository.findByActiveTrue()).thenReturn(List.of(course1, course2));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(ChatState.SELECTING_COURSE, mockSession.getCurrentState());
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Selecione seu Curso"));
-        assertTrue(messageCaptor.getValue().contains("Medicina"));
-        assertTrue(messageCaptor.getValue().contains("Sistemas de Informação"));
-    }
-
-    @Test
-    @DisplayName("Deve processar seleção de curso válida e listar disciplinas no estado SELECTING_COURSE")
-    void shouldHandleValidCourseSelectionAndListSubjects() {
-        mockSession.setCurrentState(ChatState.SELECTING_COURSE);
-
-        Course course1 = Course.builder().id(1L).name("Medicina").code("MED").build();
-        Subject subject1 = Subject.builder().id(10L).name("Semiologia Médica").code("SEM").build();
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "1", "instancia", "msg-9");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(courseRepository.findByActiveTrue()).thenReturn(List.of(course1));
-        when(subjectRepository.findByCourseIdAndActiveTrue(1L)).thenReturn(List.of(subject1));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(course1, mockSession.getSelectedCourse());
-        assertEquals(ChatState.SELECTING_SUBJECT, mockSession.getCurrentState());
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Selecione a Disciplina"));
-        assertTrue(messageCaptor.getValue().contains("Semiologia Médica"));
-    }
-
-    @Test
-    @DisplayName("Deve processar seleção de disciplina válida e retornar ao MAIN_MENU")
-    void shouldHandleValidSubjectSelectionAndReturnToMainMenu() {
-        Course course1 = Course.builder().id(1L).name("Medicina").code("MED").build();
-        Subject subject1 = Subject.builder().id(10L).name("Semiologia Médica").code("SEM").build();
-
-        mockSession.setCurrentState(ChatState.SELECTING_SUBJECT);
-        mockSession.setSelectedCourse(course1);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "1", "instancia", "msg-10");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(subjectRepository.findByCourseIdAndActiveTrue(1L)).thenReturn(List.of(subject1));
-        when(chatSessionRepository.save(any(ChatSession.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        assertEquals(subject1, mockSession.getSelectedSubject());
-        assertEquals(ChatState.MAIN_MENU, mockSession.getCurrentState());
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Semiologia Médica"));
-        assertTrue(messageCaptor.getValue().contains("Menu Principal"));
-    }
-
-    @Test
-    @DisplayName("Deve enviar mensagem de opção inválida quando texto não reconhecido for enviado no MAIN_MENU")
-    void shouldSendInvalidOptionMessageWhenUnknownOptionSentInMainMenu() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "opção desconhecida", "instancia", "msg-11");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        assertTrue(messageCaptor.getValue().contains("Opção não reconhecida"));
-    }
-
-    @Test
-    @DisplayName("Deve acionar SubjectRagService globalmente quando no MODO_RAG_DUVIDAS")
-    void shouldCallSubjectRagServiceWhenInRagDoubtModeAndSubjectIsSelected() {
-        Subject mockSubject = Subject.builder().id(10L).name("Cardiologia").code("CARD").build();
-        mockSession.setCurrentState(ChatState.RAG_DOUBT_MODE);
-        mockSession.setSelectedSubject(mockSubject);
-
-        String doubt = "Como diferenciar ICFER de ICFEN?";
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, doubt, "instancia", "msg-12");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(subjectRagService.answerDoubt(doubt, null))
-                .thenReturn("A ICFER apresenta FE < 40%, enquanto a ICFEN possui FE >= 50% com disfunção diastólica.");
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        verify(subjectRagService, times(1)).answerDoubt(doubt, null);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentText = messageCaptor.getValue();
-        assertTrue(sentText.contains("Tutor Virtual UNIPAM"));
-        assertTrue(sentText.contains("Cardiologia"));
-        assertTrue(sentText.contains("ICFER apresenta FE < 40%"));
-    }
-
-    @Test
-    @DisplayName("Deve realizar consulta RAG global quando no MODO_RAG_DUVIDAS sem disciplina selecionada")
-    void shouldQueryGlobalRagWhenInRagDoubtModeAndNoSubjectIsSelected() {
-        mockSession.setCurrentState(ChatState.RAG_DOUBT_MODE);
-        mockSession.setSelectedSubject(null);
-
-        String doubt = "Qual o tratamento de choque séptico?";
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, doubt, "instancia", "msg-13");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-        when(subjectRagService.answerDoubt(doubt, null))
-                .thenReturn("O tratamento envolve ressuscitação volêmica precoce e noradrenalina.");
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        verify(subjectRagService, times(1)).answerDoubt(doubt, null);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentText = messageCaptor.getValue();
-        assertTrue(sentText.contains("Tutor Virtual UNIPAM"));
-        assertTrue(sentText.contains("ressuscitação volêmica"));
-    }
-
-    @Test
-    @DisplayName("Deve responder com Menu Principal e saudações quando usuário enviar 'ola' ou 'oi' no MAIN_MENU")
-    void shouldSendMainMenuWhenGreetingSentInMainMenu() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "ola", "instancia", "msg-14");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentText = messageCaptor.getValue();
-        assertTrue(sentText.contains("Menu Principal"), "Deveria conter 'Menu Principal' mas foi: " + sentText);
-        assertFalse(sentText.contains("Opção não reconhecida"), "Não deveria conter 'Opção não reconhecida'");
-    }
-
-    @Test
-    @DisplayName("Deve responder com Menu Principal quando usuário enviar 'ajuda' ou 'help' no MAIN_MENU")
-    void shouldSendMainMenuWhenHelpSentInMainMenu() {
-        mockSession.setCurrentState(ChatState.MAIN_MENU);
-
-        UazapiWebhookDto webhookDto = new UazapiWebhookDto(phone + "@s.whatsapp.net", false, "ajuda", "instancia", "msg-15");
-
-        when(chatSessionRepository.findByPhoneNumber(phone)).thenReturn(Optional.of(mockSession));
-
-        orchestrator.processIncomingMessage(webhookDto);
-
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService).sendTextMessage(eq(phone), messageCaptor.capture());
-        String sentText = messageCaptor.getValue();
-        assertTrue(sentText.contains("Menu Principal"), "Deveria conter 'Menu Principal' mas foi: " + sentText);
-        assertFalse(sentText.contains("Opção não reconhecida"), "Não deveria conter 'Opção não reconhecida'");
+        verify(uazapiClientService, never()).sendTextMessage(anyString(), anyString());
+        verify(chatSessionStore, never()).save(any());
     }
 }
-

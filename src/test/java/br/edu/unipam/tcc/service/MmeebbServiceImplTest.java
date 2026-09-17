@@ -144,7 +144,7 @@ class MmeebbServiceImplTest {
         assertEquals(1, updated.getRepetitionCount());
         assertEquals(answeredAt, updated.getLastReviewedAt());
         assertEquals(LocalDate.of(2026, 9, 2), updated.getNextReviewDate()); // 31/08 + 2 dias = 02/09
-        assertEquals(ScheduleStatus.COMPLETED, updated.getStatus());
+        assertEquals(ScheduleStatus.PENDING, updated.getStatus()); // Ciclo segue aberto para a próxima revisão
     }
 
     @Test
@@ -217,7 +217,7 @@ class MmeebbServiceImplTest {
         assertEquals(6, updated.getRepetitionCount()); // Incrementa total de tentativas
         assertEquals(answeredAt, updated.getLastReviewedAt());
         assertEquals(LocalDate.of(2026, 8, 16), updated.getNextReviewDate()); // Volta para o dia seguinte
-        assertEquals(ScheduleStatus.COMPLETED, updated.getStatus());
+        assertEquals(ScheduleStatus.PENDING, updated.getStatus()); // Ciclo segue aberto para a próxima revisão
     }
 
     @Test

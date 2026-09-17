@@ -1,23 +1,27 @@
 package br.edu.unipam.tcc.scheduler;
 
-import br.edu.unipam.tcc.config.RabbitMQConfig;
-import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.entity.Student;
+import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.CorrelationMdcHelper;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
 import io.micrometer.tracing.Tracer;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 /**
- * Agendador diário responsável por identificar estudantes com revisões pendentes
- * no método MMEEBB e enfileirar notificações ativas (push) na fila do RabbitMQ.
+ * Enfileira o lembrete diário de revisões do método MMEEBB no horário escolhido por cada
+ * estudante nas Configurações. A rotina roda em rodadas curtas (padrão: 5 minutos) e usa a
+ * marcação diária do próprio aluno para garantir no máximo um lembrete por dia: um restart
+ * não duplica o envio e o lembrete de quem ficou de fora durante uma indisponibilidade é
+ * recuperado na primeira rodada seguinte.
  */
 @Slf4j
 @Component
@@ -25,40 +29,45 @@ public class DailyReviewNotificationScheduler {
 
     private final StudentRepository studentRepository;
     private final RepetitionScheduleRepository repetitionScheduleRepository;
-    private final RabbitTemplate rabbitTemplate;
+    private final OutgoingMessagePublisher outgoingMessagePublisher;
     private final Tracer tracer;
+    private final Clock clock;
 
     public DailyReviewNotificationScheduler(
             StudentRepository studentRepository,
             RepetitionScheduleRepository repetitionScheduleRepository,
-            RabbitTemplate rabbitTemplate,
-            Tracer tracer
+            OutgoingMessagePublisher outgoingMessagePublisher,
+            Tracer tracer,
+            Clock clock
     ) {
         this.studentRepository = studentRepository;
         this.repetitionScheduleRepository = repetitionScheduleRepository;
-        this.rabbitTemplate = rabbitTemplate;
+        this.outgoingMessagePublisher = outgoingMessagePublisher;
         this.tracer = tracer;
+        this.clock = clock;
     }
 
     /**
-     * Executa diariamente no horário configurado (padrão: 08:00 no fuso de São Paulo).
-     * Consulta alunos ativos, quantifica cards pendentes/vencidos e publica na fila de saída.
+     * Consulta os estudantes cujo horário de lembrete já chegou e que ainda não foram
+     * avaliados hoje, quantifica as pendências e publica na fila de saída anti-ban.
      */
-    @Scheduled(cron = "${mmeebb.scheduler.cron:0 0 8 * * *}", zone = "America/Sao_Paulo")
+    @Scheduled(cron = "${mmeebb.scheduler.cron:0 */5 * * * *}", zone = "America/Sao_Paulo")
     public void sendDailyReviewNotifications() {
         CorrelationMdcHelper.ensureTraceId(tracer);
-        log.info("[DailyScheduler] Iniciando rotina diária de notificações ativas do método MMEEBB.");
 
-        List<Student> activeStudents = studentRepository.findByActiveTrue();
-        if (activeStudents == null || activeStudents.isEmpty()) {
-            log.info("[DailyScheduler] Nenhum estudante ativo encontrado para notificações diárias.");
+        LocalDateTime now = LocalDateTime.now(clock).truncatedTo(ChronoUnit.MINUTES);
+        LocalDate today = now.toLocalDate();
+
+        List<Student> dueStudents = studentRepository.findDueForReviewNotification(now.toLocalTime(), today);
+        if (dueStudents.isEmpty()) {
+            log.debug("[ReviewScheduler] Nenhum estudante com lembrete devido às {}.", now.toLocalTime());
             return;
         }
 
-        LocalDate today = LocalDate.now();
+        log.info("[ReviewScheduler] {} estudante(s) com lembrete devido às {}.", dueStudents.size(), now.toLocalTime());
         int notificationsSent = 0;
 
-        for (Student student : activeStudents) {
+        for (Student student : dueStudents) {
             int[] sentInThisIteration = {0};
             CorrelationMdcHelper.runWithContext(student.getPhoneNumber(), "DAILY_SCHEDULER", () -> {
                 try {
@@ -66,36 +75,32 @@ public class DailyReviewNotificationScheduler {
                             .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(student.getId(), today);
 
                     if (pendingCount > 0) {
-                        String studentName = student.getFullName() != null && !student.getFullName().isBlank()
-                                ? student.getFullName().trim()
-                                : "Estudante";
-
-                        String messageText = buildNotificationMessage(studentName, pendingCount);
-                        OutgoingMessageDto outgoingDto = new OutgoingMessageDto(student.getPhoneNumber(), messageText);
-
-                        rabbitTemplate.convertAndSend(
-                                RabbitMQConfig.EXCHANGE_NAME,
-                                RabbitMQConfig.OUTGOING_ROUTING_KEY,
-                                outgoingDto
-                        );
+                        outgoingMessagePublisher.publish(
+                                student.getPhoneNumber(),
+                                buildNotificationMessage(student.displayName(), pendingCount));
 
                         sentInThisIteration[0] = 1;
-                        log.info("[DailyScheduler] Notificação push enfileirada para [{}] ({} pendências)",
+                        log.info("[ReviewScheduler] Lembrete enfileirado para [{}] ({} pendências)",
                                 student.getPhoneNumber(), pendingCount);
                     } else {
-                        log.debug("[DailyScheduler] Nenhuma revisão pendente para estudante [{}] hoje.",
+                        log.debug("[ReviewScheduler] Nenhuma revisão pendente para o estudante [{}] hoje.",
                                 student.getPhoneNumber());
                     }
+
+                    // Pendência depende só da data: avaliado hoje, só volta a ser avaliado amanhã.
+                    student.setLastReviewNotificationOn(today);
+                    studentRepository.save(student);
                 } catch (Exception e) {
-                    log.error("[DailyScheduler] Falha ao processar notificação diária para o estudante [{}]: {}",
+                    log.error("[ReviewScheduler] Falha ao processar o lembrete do estudante [{}]; "
+                                    + "nova tentativa na próxima rodada: {}",
                             student.getPhoneNumber(), e.getMessage(), e);
                 }
             });
             notificationsSent += sentInThisIteration[0];
         }
 
-        log.info("[DailyScheduler] Rotina diária concluída. Total de notificações enfileiradas: {} de {} estudantes ativos.",
-                notificationsSent, activeStudents.size());
+        log.info("[ReviewScheduler] Rodada concluída: {} lembrete(s) enfileirado(s) de {} estudante(s) devido(s).",
+                notificationsSent, dueStudents.size());
     }
 
     /**

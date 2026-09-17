@@ -115,7 +115,7 @@ mmeebb:
   session:
     ttl-minutes: ${MMEEBB_SESSION_TTL_MINUTES:60}
   scheduler:
-    cron: ${MMEEBB_SCHEDULER_CRON:0 0 8 * * *}
+    cron: ${MMEEBB_SCHEDULER_CRON:0 */5 * * * *}
 
 
 

@@ -1,30 +1,44 @@
 package br.edu.unipam.tcc.scheduler;
 
-import br.edu.unipam.tcc.config.RabbitMQConfig;
-import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.entity.Student;
+import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
 import io.micrometer.tracing.Tracer;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class DailyReviewNotificationSchedulerTest {
+
+    private static final ZoneId ZONE = ZoneId.of("America/Sao_Paulo");
+    private static final LocalDate TODAY = LocalDate.of(2026, 9, 17);
 
     @Mock
     private StudentRepository studentRepository;
@@ -33,168 +47,120 @@ class DailyReviewNotificationSchedulerTest {
     private RepetitionScheduleRepository repetitionScheduleRepository;
 
     @Mock
-    private RabbitTemplate rabbitTemplate;
+    private OutgoingMessagePublisher outgoingMessagePublisher;
 
     @Mock
     private Tracer tracer;
 
-    private DailyReviewNotificationScheduler scheduler;
-
-    @BeforeEach
-    void setUp() {
-        scheduler = new DailyReviewNotificationScheduler(
-                studentRepository,
-                repetitionScheduleRepository,
-                rabbitTemplate,
-                tracer
-        );
+    private DailyReviewNotificationScheduler schedulerAt(LocalTime time) {
+        Clock clock = Clock.fixed(LocalDateTime.of(TODAY, time).atZone(ZONE).toInstant(), ZONE);
+        return new DailyReviewNotificationScheduler(
+                studentRepository, repetitionScheduleRepository, outgoingMessagePublisher, tracer, clock);
     }
 
-    @Test
-    @DisplayName("Smoke Test: Deve executar ciclo completo de agendamento diário com sucesso")
-    void deveExecutarCicloDeAgendamentoDiarioComSucesso() {
-        Student student = Student.builder()
+    private Student student(String fullName, String phone) {
+        return Student.builder()
                 .id(UUID.randomUUID())
-                .fullName("Dr. João Silva")
-                .phoneNumber("5534999991111")
+                .fullName(fullName)
+                .phoneNumber(phone)
+                .preferredStudyTime(LocalTime.of(12, 15))
                 .active(true)
                 .build();
-
-        when(studentRepository.findByActiveTrue()).thenReturn(List.of(student));
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(student.getId()), any(LocalDate.class)))
-                .thenReturn(3L);
-
-        scheduler.sendDailyReviewNotifications();
-
-        verify(rabbitTemplate, times(1)).convertAndSend(
-                eq(RabbitMQConfig.EXCHANGE_NAME),
-                eq(RabbitMQConfig.OUTGOING_ROUTING_KEY),
-                any(OutgoingMessageDto.class)
-        );
     }
 
     @Test
-    @DisplayName("Deve enfileirar mensagem formatada para estudante com pendências MMEEBB")
-    void deveEnfileirarMensagemFormatadaParaEstudanteComPendencias() {
-        UUID studentId = UUID.randomUUID();
-        Student student = Student.builder()
-                .id(studentId)
-                .fullName("Maria Souza")
-                .phoneNumber("5534988882222")
-                .active(true)
-                .build();
+    @DisplayName("Deve consultar alunos devidos com o minuto da rodada (sem segundos) e a data de São Paulo")
+    void deveConsultarAlunosDevidosComMinutoTruncado() {
+        when(studentRepository.findDueForReviewNotification(any(), any())).thenReturn(List.of());
 
-        when(studentRepository.findByActiveTrue()).thenReturn(List.of(student));
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(studentId), any(LocalDate.class)))
+        schedulerAt(LocalTime.of(12, 20, 0, 350_000_000)).sendDailyReviewNotifications();
+
+        verify(studentRepository).findDueForReviewNotification(LocalTime.of(12, 20), TODAY);
+    }
+
+    @Test
+    @DisplayName("Não deve contar pendências nem publicar quando nenhum aluno estiver devido")
+    void naoDeveFazerNadaQuandoNenhumAlunoEstiverDevido() {
+        when(studentRepository.findDueForReviewNotification(any(), any())).thenReturn(List.of());
+
+        schedulerAt(LocalTime.of(12, 20)).sendDailyReviewNotifications();
+
+        verifyNoInteractions(repetitionScheduleRepository, outgoingMessagePublisher);
+    }
+
+    @Test
+    @DisplayName("Deve enviar lembrete com o nome de exibição e marcar o dia como avaliado")
+    void deveEnviarLembreteComNomeDeExibicaoEMarcarODia() {
+        Student maria = student("Maria Souza", "5534988882222");
+        maria.setPreferredName("Mari");
+        when(studentRepository.findDueForReviewNotification(any(), any())).thenReturn(List.of(maria));
+        when(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(maria.getId(), TODAY))
                 .thenReturn(5L);
 
-        scheduler.sendDailyReviewNotifications();
+        schedulerAt(LocalTime.of(12, 20)).sendDailyReviewNotifications();
 
-        ArgumentCaptor<OutgoingMessageDto> messageCaptor = ArgumentCaptor.forClass(OutgoingMessageDto.class);
-        verify(rabbitTemplate).convertAndSend(
-                eq(RabbitMQConfig.EXCHANGE_NAME),
-                eq(RabbitMQConfig.OUTGOING_ROUTING_KEY),
-                messageCaptor.capture()
-        );
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(outgoingMessagePublisher).publish(eq("5534988882222"), message.capture());
+        assertTrue(message.getValue().contains("*Mari*"));
+        assertTrue(message.getValue().contains("*5*"));
+        assertTrue(message.getValue().contains("MMEEBB"));
+        assertTrue(message.getValue().contains("*revisar*"));
 
-        OutgoingMessageDto captured = messageCaptor.getValue();
-        assertEquals("5534988882222", captured.phoneNumber());
-        assertTrue(captured.messageText().contains("Maria"));
-        assertTrue(captured.messageText().contains("5"));
-        assertTrue(captured.messageText().contains("MMEEBB"));
-        assertTrue(captured.messageText().contains("*revisar*"));
+        verify(studentRepository).save(maria);
+        assertEquals(TODAY, maria.getLastReviewNotificationOn());
     }
 
     @Test
-    @DisplayName("Não deve enfileirar notificação quando estudante não possui revisões pendentes")
-    void naoDeveEnfileirarNotificacaoQuandoEstudanteNaoPossuiPendencias() {
-        UUID studentId = UUID.randomUUID();
-        Student student = Student.builder()
-                .id(studentId)
-                .fullName("Carlos Pereira")
-                .phoneNumber("5534977773333")
-                .active(true)
-                .build();
-
-        when(studentRepository.findByActiveTrue()).thenReturn(List.of(student));
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(studentId), any(LocalDate.class)))
+    @DisplayName("Deve marcar o dia como avaliado mesmo sem pendências, sem publicar mensagem")
+    void deveMarcarODiaMesmoSemPendencias() {
+        Student carlos = student("Carlos Pereira", "5534977773333");
+        when(studentRepository.findDueForReviewNotification(any(), any())).thenReturn(List.of(carlos));
+        when(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(carlos.getId(), TODAY))
                 .thenReturn(0L);
 
-        scheduler.sendDailyReviewNotifications();
+        schedulerAt(LocalTime.of(12, 20)).sendDailyReviewNotifications();
 
-        verifyNoInteractions(rabbitTemplate);
+        verifyNoInteractions(outgoingMessagePublisher);
+        verify(studentRepository).save(carlos);
+        assertEquals(TODAY, carlos.getLastReviewNotificationOn());
     }
 
     @Test
-    @DisplayName("Deve processar múltiplos estudantes e notificar apenas os que possuem pendências")
-    void deveProcessarMultiplosEstudantesNotificandoApenasPendentes() {
-        Student student1 = Student.builder()
-                .id(UUID.randomUUID())
-                .fullName("Aluno Com Revisao")
-                .phoneNumber("5534911110001")
-                .active(true)
-                .build();
+    @DisplayName("Não deve marcar o dia quando a publicação falhar, para tentar de novo na próxima rodada")
+    void naoDeveMarcarODiaQuandoAPublicacaoFalhar() {
+        Student joao = student("João Silva", "5534999991111");
+        when(studentRepository.findDueForReviewNotification(any(), any())).thenReturn(List.of(joao));
+        when(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(joao.getId(), TODAY))
+                .thenReturn(3L);
+        doThrow(new RuntimeException("RabbitMQ indisponível"))
+                .when(outgoingMessagePublisher).publish(anyString(), anyString());
 
-        Student student2 = Student.builder()
-                .id(UUID.randomUUID())
-                .fullName("Aluno Sem Revisao")
-                .phoneNumber("5534911110002")
-                .active(true)
-                .build();
+        assertDoesNotThrow(() -> schedulerAt(LocalTime.of(12, 20)).sendDailyReviewNotifications());
 
-        Student student3 = Student.builder()
-                .id(UUID.randomUUID())
-                .fullName("Aluno Outra Revisao")
-                .phoneNumber("5534911110003")
-                .active(true)
-                .build();
-
-        when(studentRepository.findByActiveTrue()).thenReturn(List.of(student1, student2, student3));
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(student1.getId()), any(LocalDate.class)))
-                .thenReturn(2L);
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(student2.getId()), any(LocalDate.class)))
-                .thenReturn(0L);
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(student3.getId()), any(LocalDate.class)))
-                .thenReturn(7L);
-
-        scheduler.sendDailyReviewNotifications();
-
-        verify(rabbitTemplate, times(2)).convertAndSend(
-                eq(RabbitMQConfig.EXCHANGE_NAME),
-                eq(RabbitMQConfig.OUTGOING_ROUTING_KEY),
-                any(OutgoingMessageDto.class)
-        );
+        verify(studentRepository, never()).save(any());
+        assertNull(joao.getLastReviewNotificationOn());
     }
 
     @Test
-    @DisplayName("Deve isolar falhas de envio por estudante sem interromper o loop dos demais")
-    void deveIsolarFalhasPorEstudanteSemInterromperOutros() {
-        Student studentFail = Student.builder()
-                .id(UUID.randomUUID())
-                .fullName("Aluno Falha")
-                .phoneNumber("5534999990001")
-                .active(true)
-                .build();
-
-        Student studentOk = Student.builder()
-                .id(UUID.randomUUID())
-                .fullName("Aluno Sucesso")
-                .phoneNumber("5534999990002")
-                .active(true)
-                .build();
-
-        when(studentRepository.findByActiveTrue()).thenReturn(List.of(studentFail, studentOk));
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(studentFail.getId()), any(LocalDate.class)))
+    @DisplayName("Deve isolar falhas por estudante sem interromper os demais")
+    void deveIsolarFalhasPorEstudante() {
+        Student falha = student("Aluno Falha", "5534999990001");
+        Student ok = student("Aluno Sucesso", "5534999990002");
+        when(studentRepository.findDueForReviewNotification(any(), any())).thenReturn(List.of(falha, ok));
+        when(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(falha.getId(), TODAY))
                 .thenThrow(new RuntimeException("Falha temporária de banco"));
-        when(repetitionScheduleRepository.countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(studentOk.getId()), any(LocalDate.class)))
+        when(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(ok.getId(), TODAY))
                 .thenReturn(1L);
 
-        assertDoesNotThrow(() -> scheduler.sendDailyReviewNotifications());
+        assertDoesNotThrow(() -> schedulerAt(LocalTime.of(12, 20)).sendDailyReviewNotifications());
 
-        verify(rabbitTemplate, times(1)).convertAndSend(
-                eq(RabbitMQConfig.EXCHANGE_NAME),
-                eq(RabbitMQConfig.OUTGOING_ROUTING_KEY),
-                any(OutgoingMessageDto.class)
-        );
+        verify(outgoingMessagePublisher, times(1)).publish(eq("5534999990002"), anyString());
+        verify(studentRepository, never()).save(falha);
+        verify(studentRepository).save(ok);
     }
 }

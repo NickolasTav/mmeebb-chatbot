@@ -119,7 +119,7 @@ flowchart TB
         ORCH -->|2. Avaliação de Respostas MMEEBB| MMEEBB[MmeebbService 2^n]
         ORCH -->|3. Dúvidas Clínicas & RAG| RAG[SubjectRagService + Gemini]
         
-        SCHED[DailyReviewNotificationScheduler] -->|Disparo Diário 08:00| Q_OUT[whatsapp.outgoing.queue]
+        SCHED[DailyReviewNotificationScheduler] -->|Rodada 5min: horário de cada aluno| Q_OUT[whatsapp.outgoing.queue]
         Q_OUT -->|Rate Limit + Anti-Ban + Composing| OUT_CONS[WhatsappOutgoingConsumer]
         
         OUT_CONS -->|POST /message/sendText| REST_CLI[UazapiClientService]
@@ -395,7 +395,7 @@ ngrok http 8080
 | `SPRING_REDIS_PORT` | `6379` | Porta do Redis |
 | `SPRING_REDIS_PASSWORD` | *(Vazio)* | Senha do Redis, se houver |
 | `MMEEBB_SESSION_TTL_MINUTES` | `60` | Tempo de expiração da sessão conversacional no Redis |
-| `MMEEBB_SCHEDULER_CRON` | `0 0 8 * * *` | Cron das notificações diárias de revisões pendentes |
+| `MMEEBB_SCHEDULER_CRON` | `0 */5 * * * *` | Frequência das rodadas de lembrete; cada aluno recebe no horário definido em Configurações |
 | `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi |
 | `UAZAPI_API_KEY` | *(Vazio)* | Token/Chave de autenticação da Uazapi |
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |

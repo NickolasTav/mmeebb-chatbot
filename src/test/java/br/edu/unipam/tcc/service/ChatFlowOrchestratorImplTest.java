@@ -9,6 +9,8 @@ import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
+import br.edu.unipam.tcc.config.RabbitMQConfig;
+import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
@@ -32,6 +34,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -63,12 +66,12 @@ class ChatFlowOrchestratorImplTest {
     @Mock private FlashcardRepository flashcardRepository;
     @Mock private RepetitionScheduleRepository repetitionScheduleRepository;
     @Mock private MmeebbService mmeebbService;
-    @Mock private UazapiClientService uazapiClientService;
     @Mock private SubjectRagService subjectRagService;
     @Mock private IntentRouterService intentRouterService;
     @Mock private AnswerEvaluationService answerEvaluationService;
     @Mock private StudentOnboardingService studentOnboardingService;
     @Mock private MmeebbMetrics mmeebbMetrics;
+    @Mock private RabbitTemplate rabbitTemplate;
 
     @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
 
@@ -116,9 +119,10 @@ class ChatFlowOrchestratorImplTest {
     }
 
     private String lastSentMessage() {
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService, org.mockito.Mockito.atLeastOnce()).sendTextMessage(eq(PHONE), captor.capture());
-        return captor.getValue();
+        ArgumentCaptor<OutgoingMessageDto> captor = ArgumentCaptor.forClass(OutgoingMessageDto.class);
+        verify(rabbitTemplate, org.mockito.Mockito.atLeastOnce())
+                .convertAndSend(eq(RabbitMQConfig.EXCHANGE_NAME), eq(RabbitMQConfig.OUTGOING_ROUTING_KEY), captor.capture());
+        return captor.getValue().messageText();
     }
 
     // =========================================================================
@@ -499,7 +503,7 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(null);
         orchestrator.processIncomingMessage(new UazapiWebhookDto(null, JID, true, "oi", null, null, "msg"));
 
-        verify(uazapiClientService, never()).sendTextMessage(anyString(), anyString());
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
         verify(chatSessionStore, never()).save(any());
     }
 }

@@ -53,6 +53,7 @@ spring:
     password: ${SPRING_RABBITMQ_PASSWORD:guest}
     listener:
       simple:
+        prefetch: 1
         retry:
           enabled: true
           initial-interval: 2000ms
@@ -95,6 +96,8 @@ uazapi:
   instance: ${UAZAPI_INSTANCE:}
   admin-token: ${UAZAPI_ADMIN_TOKEN:}
   typing-delay-ms: ${UAZAPI_TYPING_DELAY_MS:2000}
+  inbound:
+    concurrency: ${UAZAPI_INBOUND_CONCURRENCY:3-6}
 
 ngrok:
   client-api-url: ${NGROK_CLIENT_API_URL:http://127.0.0.1:4040}

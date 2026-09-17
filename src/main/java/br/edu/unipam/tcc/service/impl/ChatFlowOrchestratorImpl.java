@@ -1,7 +1,9 @@
 package br.edu.unipam.tcc.service.impl;
 
+import br.edu.unipam.tcc.config.RabbitMQConfig;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
+import br.edu.unipam.tcc.dto.OutgoingMessageDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.Flashcard;
@@ -24,11 +26,11 @@ import br.edu.unipam.tcc.service.IntentRouterService;
 import br.edu.unipam.tcc.service.MmeebbService;
 import br.edu.unipam.tcc.service.StudentOnboardingService;
 import br.edu.unipam.tcc.service.SubjectRagService;
-import br.edu.unipam.tcc.service.UazapiClientService;
 import br.edu.unipam.tcc.session.ChatSessionState;
 import br.edu.unipam.tcc.session.ChatSessionStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -72,12 +74,12 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final FlashcardRepository flashcardRepository;
     private final RepetitionScheduleRepository repetitionScheduleRepository;
     private final MmeebbService mmeebbService;
-    private final UazapiClientService uazapiClientService;
     private final SubjectRagService subjectRagService;
     private final IntentRouterService intentRouterService;
     private final AnswerEvaluationService answerEvaluationService;
     private final StudentOnboardingService studentOnboardingService;
     private final MmeebbMetrics mmeebbMetrics;
+    private final RabbitTemplate rabbitTemplate;
 
     @Override
     public void processIncomingMessage(UazapiWebhookDto webhookDto) {
@@ -619,7 +621,8 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     private void send(ChatSessionState session, String message) {
-        uazapiClientService.sendTextMessage(session.getPhoneNumber(), message);
+        OutgoingMessageDto outgoingDto = new OutgoingMessageDto(session.getPhoneNumber(), message);
+        rabbitTemplate.convertAndSend(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.OUTGOING_ROUTING_KEY, outgoingDto);
     }
 
     private void sendMainMenu(ChatSessionState session) {

@@ -1,5 +1,7 @@
 package dev.langchain4j.model.googleai;
 
+import okhttp3.ConnectionPool;
+import okhttp3.Dispatcher;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -12,6 +14,7 @@ import retrofit2.converter.gson.GsonConverterFactory;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Utilitário para correção de timeout e resiliência a alta demanda (HTTP 503 / 429) no LangChain4j 0.35.0.
@@ -19,10 +22,20 @@ import java.time.Duration;
  * 1. Define connectTimeout, readTimeout e writeTimeout adequados no OkHttpClient.
  * 2. Adiciona interceptor de resiliência com retentativas automáticas e failover entre
  *    gemini-3.5-flash-lite e gemini-3.5-flash quando o Google retornar 503 (High Demand).
+ * 3. Abre o Dispatcher/ConnectionPool acima do default do OkHttp (maxRequestsPerHost = 5) para que
+ *    aumentar a concorrência do @RabbitListener de entrada vire paralelismo real nas chamadas ao
+ *    Gemini, em vez de enfileirar silenciosamente dentro do próprio cliente HTTP.
  */
 public class GeminiServiceCustomizer {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiServiceCustomizer.class);
+
+    private static Dispatcher newDispatcher() {
+        Dispatcher dispatcher = new Dispatcher();
+        dispatcher.setMaxRequestsPerHost(10);
+        dispatcher.setMaxRequests(20);
+        return dispatcher;
+    }
 
     public static void configureTimeouts(GoogleAiGeminiChatModel model, Duration timeout) {
         try {
@@ -34,6 +47,8 @@ public class GeminiServiceCustomizer {
                     .connectTimeout(timeout)
                     .readTimeout(timeout)
                     .writeTimeout(timeout)
+                    .dispatcher(newDispatcher())
+                    .connectionPool(new ConnectionPool(10, 5, TimeUnit.MINUTES))
                     .addInterceptor(new HighDemandRetryInterceptor(true))
                     .build();
 
@@ -60,6 +75,8 @@ public class GeminiServiceCustomizer {
                     .connectTimeout(timeout)
                     .readTimeout(timeout)
                     .writeTimeout(timeout)
+                    .dispatcher(newDispatcher())
+                    .connectionPool(new ConnectionPool(10, 5, TimeUnit.MINUTES))
                     .addInterceptor(new HighDemandRetryInterceptor(false))
                     .build();
 

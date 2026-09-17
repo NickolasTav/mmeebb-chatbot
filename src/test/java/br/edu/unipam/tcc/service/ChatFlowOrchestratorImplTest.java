@@ -40,6 +40,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -336,7 +337,7 @@ class ChatFlowOrchestratorImplTest {
         when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
         when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
         when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
-                .thenReturn(new AnswerEvaluationDto(true, "Boa! É exatamente a conduta indicada."));
+                .thenReturn(new AnswerEvaluationDto(true, "Boa! É exatamente a conduta indicada.", false));
 
         RepetitionSchedule schedule = RepetitionSchedule.builder()
                 .student(student).flashcard(flashcard).nIndex(1).intervalDays(2).build();
@@ -393,6 +394,52 @@ class ChatFlowOrchestratorImplTest {
         String sent = lastSentMessage();
         assertTrue(sent.contains("Resposta incorreta"));
         assertTrue(sent.contains("Cardioversão elétrica sincronizada"));
+    }
+
+    @Test
+    @DisplayName("Deve consultar o RAG e reenviar a questão quando o aluno tiver dúvida em revisão")
+    void shouldQueryRagAndResendQuestionWhenDoubtDuringReview() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
+        when(flashcardRepository.findSubjectIdById(flashcard.getId())).thenReturn(Optional.of(subject.getId()));
+        when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
+                .thenReturn(AnswerEvaluationDto.doubt());
+        when(subjectRagService.answerDoubt(anyString(), eq(subject.getId())))
+                .thenReturn("A cardioversão elétrica sincronizada é indicada porque...");
+
+        orchestrator.processIncomingMessage(message("não entendi, pode explicar essa questão?"));
+
+        verify(subjectRagService).answerDoubt(anyString(), eq(subject.getId()));
+        verify(repetitionScheduleRepository, never()).save(any());
+        verify(mmeebbService, never()).processAnswer(any(), anyBoolean(), any());
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("cardioversão elétrica sincronizada é indicada"));
+        assertTrue(sent.contains("Qual a primeira conduta na FA instável?"));
+    }
+
+    @Test
+    @DisplayName("Deve manter o flashcard ativo e o estado de revisão após uma dúvida")
+    void shouldKeepActiveFlashcardAfterDoubtDuringReview() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
+        when(flashcardRepository.findSubjectIdById(flashcard.getId())).thenReturn(Optional.of(subject.getId()));
+        when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
+                .thenReturn(AnswerEvaluationDto.doubt());
+        when(subjectRagService.answerDoubt(anyString(), eq(subject.getId()))).thenReturn("Explicação.");
+
+        orchestrator.processIncomingMessage(message("por que não é outra conduta?"));
+
+        assertEquals(ChatState.REVIEW_MODE, session.getCurrentState());
+        assertEquals(flashcard.getId(), session.getCurrentFlashcardId());
     }
 
     @Test

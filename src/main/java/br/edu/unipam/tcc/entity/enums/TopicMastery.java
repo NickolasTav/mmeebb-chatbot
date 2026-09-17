@@ -51,4 +51,21 @@ public enum TopicMastery {
     public boolean limitsInterval() {
         return maxNIndex < CLASSIC_MAX_N_INDEX;
     }
+
+    /**
+     * Posição na fila de revisão do dia: quanto menor, mais cedo o cartão é apresentado.
+     *
+     * <p>Um tópico sem amostra vem antes de um dominado porque ainda não há prova de retenção;
+     * vem depois dos frágeis porque estes já têm evidência de dificuldade. Importa para o aluno
+     * exausto que responde só as primeiras questões da sessão (limite de cerca de quatro
+     * <i>chunks</i> descrito por Cowan, 2001).
+     */
+    public int reviewPriority() {
+        return switch (this) {
+            case FRAGIL -> 0;
+            case EM_CONSOLIDACAO -> 1;
+            case SEM_DADOS -> 2;
+            case DOMINADO -> 3;
+        };
+    }
 }

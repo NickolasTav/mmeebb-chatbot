@@ -85,6 +85,7 @@ logging:
     org.hibernate.SQL: WARN
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} %clr(%5p) [%X{traceId:-},%X{studentPhone:-},%X{action:-}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} %5p [%X{traceId:-},%X{studentPhone:-},%X{action:-}] %logger{36} - %msg%n"
   file:
     name: logs/application.log
 

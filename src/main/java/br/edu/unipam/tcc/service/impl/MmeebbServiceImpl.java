@@ -4,6 +4,7 @@ import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.entity.enums.TopicMastery;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.MmeebbService;
 import org.springframework.stereotype.Service;
@@ -13,6 +14,9 @@ import java.time.LocalDateTime;
 
 @Service
 public class MmeebbServiceImpl implements MmeebbService {
+
+    /** Casas que o expoente recua quando o erro acontece em um tópico já dominado. */
+    private static final int LAPSE_STEP_BACK = 2;
 
     private final MmeebbMetrics mmeebbMetrics;
 
@@ -58,6 +62,12 @@ public class MmeebbServiceImpl implements MmeebbService {
 
     @Override
     public RepetitionSchedule processAnswer(RepetitionSchedule schedule, boolean isCorrect, LocalDateTime answeredAt) {
+        return processAnswer(schedule, isCorrect, answeredAt, TopicMastery.SEM_DADOS);
+    }
+
+    @Override
+    public RepetitionSchedule processAnswer(RepetitionSchedule schedule, boolean isCorrect,
+                                            LocalDateTime answeredAt, TopicMastery mastery) {
         if (schedule == null) {
             throw new IllegalArgumentException("Schedule não pode ser nulo");
         }
@@ -65,24 +75,20 @@ public class MmeebbServiceImpl implements MmeebbService {
             throw new IllegalArgumentException("Timestamp de resposta (answeredAt) não pode ser nulo");
         }
 
+        TopicMastery topicMastery = mastery != null ? mastery : TopicMastery.SEM_DADOS;
+
         schedule.setRepetitionCount(schedule.getRepetitionCount() + 1);
         schedule.setLastReviewedAt(answeredAt);
         // O agendamento permanece PENDING: a repetição espaçada é cíclica e o card
         // volta a ser elegível quando nextReviewDate chegar. COMPLETED encerraria o ciclo.
         schedule.setStatus(ScheduleStatus.PENDING);
 
-        if (isCorrect) {
-            int newN = Math.min(schedule.getNIndex() + 1, MAX_N_INDEX);
-            schedule.setNIndex(newN);
-            schedule.setIntervalDays(calculateIntervalDays(newN));
-            schedule.setConsecutiveCorrect(schedule.getConsecutiveCorrect() + 1);
-        } else {
-            schedule.setNIndex(0);
-            schedule.setIntervalDays(1);
-            schedule.setConsecutiveCorrect(0);
-        }
+        int newN = nextNIndex(schedule.getNIndex(), isCorrect, topicMastery);
+        schedule.setNIndex(newN);
+        schedule.setIntervalDays(calculateIntervalDays(newN));
+        schedule.setConsecutiveCorrect(isCorrect ? schedule.getConsecutiveCorrect() + 1 : 0);
 
-        LocalDate nextDate = calculateNextReviewDate(answeredAt.toLocalDate(), schedule.getNIndex());
+        LocalDate nextDate = calculateNextReviewDate(answeredAt.toLocalDate(), newN);
         schedule.setNextReviewDate(nextDate);
 
         String specialty = schedule.getFlashcard() != null && schedule.getFlashcard().getSubject() != null
@@ -91,5 +97,25 @@ public class MmeebbServiceImpl implements MmeebbService {
         mmeebbMetrics.recordReview(isCorrect, specialty);
 
         return schedule;
+    }
+
+    /**
+     * Fórmula única do MMEEBB adaptativo. O teto do domínio é o que personaliza a revisão:
+     * enquanto o tópico for frágil, o expoente não cresce além de 3 e o cartão permanece no ciclo
+     * curto por mais que o aluno acerte. O recuo de duas casas vale só para tópico dominado, onde
+     * o erro é um lapso isolado e zerar meses de consolidação seria punitivo demais.
+     */
+    private int nextNIndex(int currentN, boolean isCorrect, TopicMastery mastery) {
+        int candidate;
+        if (isCorrect) {
+            candidate = currentN + 1;
+        } else if (mastery == TopicMastery.DOMINADO) {
+            candidate = currentN - LAPSE_STEP_BACK;
+        } else {
+            candidate = 0;
+        }
+
+        int ceiling = Math.min(MAX_N_INDEX, mastery.maxNIndex());
+        return Math.min(Math.max(candidate, 0), ceiling);
     }
 }

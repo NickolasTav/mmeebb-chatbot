@@ -2,6 +2,7 @@ package br.edu.unipam.tcc.repository;
 
 import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -27,6 +28,12 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
             "AND sc.course.id = s.flashcard.subject.course.id " +
             "AND sc.active = true) ";
 
+    /**
+     * O agendamento do card em revisão é usado fora de transação pelo orquestrador, e o motor
+     * MMEEBB lê a disciplina do flashcard para a métrica de domínio. Sem trazer os dois carregados
+     * aqui, esse acesso estoura com LazyInitializationException e o bot emudece na resposta do aluno.
+     */
+    @EntityGraph(attributePaths = {"flashcard", "flashcard.subject"})
     Optional<RepetitionSchedule> findByStudentIdAndFlashcardId(UUID studentId, Long flashcardId);
 
     List<RepetitionSchedule> findByStudentId(UUID studentId);

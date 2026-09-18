@@ -7,12 +7,14 @@ import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import org.hibernate.Hibernate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -57,6 +59,7 @@ class RepetitionScheduleRepositoryTest {
     @Autowired private FlashcardRepository flashcardRepository;
     @Autowired private StudentCourseRepository studentCourseRepository;
     @Autowired private RepetitionScheduleRepository repetitionScheduleRepository;
+    @Autowired private TestEntityManager entityManager;
 
     private Student student;
     private Course medicina;
@@ -170,6 +173,32 @@ class RepetitionScheduleRepositoryTest {
         assertThat(repetitionScheduleRepository
                 .findFutureSchedulesByTopic(student.getId(), farmacologia.getId(), "Antibioticoterapia", TODAY))
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("Deve trazer flashcard e disciplina já inicializados ao buscar o agendamento do card em revisão")
+    void deveTrazerFlashcardEDisciplinaInicializados() {
+        enroll(medicina, true);
+        Subject farmacologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_FARMACO").name("Farmacologia IT").build());
+        RepetitionSchedule agendado = scheduleFor(farmacologia, "Antibioticoterapia", TODAY);
+
+        // Sem limpar o contexto, a entidade viria do cache de primeiro nível e o teste passaria
+        // mesmo com o carregamento preguiçoso — que é o que quebra o modo de revisão em produção.
+        entityManager.flush();
+        entityManager.clear();
+
+        RepetitionSchedule encontrado = repetitionScheduleRepository
+                .findByStudentIdAndFlashcardId(student.getId(), agendado.getFlashcard().getId())
+                .orElseThrow();
+
+        assertThat(Hibernate.isInitialized(encontrado.getFlashcard()))
+                .as("flashcard deve vir carregado, senão MmeebbServiceImpl estoura fora da sessão")
+                .isTrue();
+        assertThat(Hibernate.isInitialized(encontrado.getFlashcard().getSubject()))
+                .as("disciplina é lida para a métrica de domínio")
+                .isTrue();
+        assertThat(encontrado.getFlashcard().getSubject().getName()).isEqualTo("Farmacologia IT");
     }
 
     private RepetitionSchedule scheduleFor(Subject subject, String topic, LocalDate nextReviewDate) {

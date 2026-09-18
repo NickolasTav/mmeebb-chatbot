@@ -7,6 +7,8 @@ public enum ChatIntent {
     ASK_DOUBT,
     /** Quer ver ou alterar suas configurações: apelido, lembrete, curso ou período. */
     OPEN_SETTINGS,
+    /** Quer saber como esta indo: taxa de acerto, pontos fracos e progresso. */
+    SHOW_PERFORMANCE,
     /** Quer ver o menu de opções. */
     SHOW_MENU,
     /** Quer encerrar a sessão. */

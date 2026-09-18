@@ -3,8 +3,12 @@ package br.edu.unipam.tcc.service;
 import br.edu.unipam.tcc.config.AdaptiveProperties;
 import br.edu.unipam.tcc.config.TimeConfig;
 import br.edu.unipam.tcc.dto.AttemptTotalsDto;
+import br.edu.unipam.tcc.dto.PerformanceOverviewDto;
+import br.edu.unipam.tcc.dto.StudentPerformanceReportDto;
+import br.edu.unipam.tcc.dto.SubjectAttemptAggregateDto;
 import br.edu.unipam.tcc.dto.TopicAttemptAggregateDto;
 import br.edu.unipam.tcc.dto.TopicPerformanceDto;
+import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.enums.TopicMastery;
 import br.edu.unipam.tcc.repository.ReviewAttemptRepository;
 import br.edu.unipam.tcc.service.impl.PerformanceAnalysisServiceImpl;
@@ -174,5 +178,86 @@ class PerformanceAnalysisServiceImplTest {
     @DisplayName("Deve expor a janela de análise usada, para a mensagem exibida ao estudante")
     void deveExporAJanelaDeAnalise() {
         assertThat(service.windowDays()).isEqualTo(90);
+    }
+
+    // =========================================================================
+    // Relatório de desempenho
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve montar o relatório do estudante com totais, percentuais e tópicos ordenados")
+    void deveMontarORelatorioDoEstudante() {
+        givenAggregates(aggregate("Antibioticoterapia", 10, 7), aggregate("Anti-hipertensivos", 10, 1));
+        when(reviewAttemptRepository.totalsByStudent(eq(ALUNO), any()))
+                .thenReturn(new AttemptTotalsDto(20L, 12L));
+
+        StudentPerformanceReportDto relatorio = service.buildStudentReport(aluno());
+
+        assertThat(relatorio.studentId()).isEqualTo(ALUNO);
+        assertThat(relatorio.studentName()).isEqualTo("Mari");
+        assertThat(relatorio.windowDays()).isEqualTo(90);
+        assertThat(relatorio.totalAttempts()).isEqualTo(20);
+        assertThat(relatorio.correctAttempts()).isEqualTo(12);
+        assertThat(relatorio.overallAccuracy()).isEqualTo(0.6);
+        assertThat(relatorio.accuracyPercentage()).isEqualTo(60);
+        assertThat(relatorio.enoughData()).isTrue();
+        assertThat(relatorio.topics()).extracting(TopicPerformanceDto::topic)
+                .containsExactly("Antibioticoterapia", "Anti-hipertensivos");
+    }
+
+    @Test
+    @DisplayName("Deve sinalizar amostra insuficiente quando o estudante respondeu pouco")
+    void deveSinalizarAmostraInsuficienteNoRelatorio() {
+        givenAggregates();
+        when(reviewAttemptRepository.totalsByStudent(eq(ALUNO), any()))
+                .thenReturn(new AttemptTotalsDto(4L, 3L));
+
+        StudentPerformanceReportDto relatorio = service.buildStudentReport(aluno());
+
+        assertThat(relatorio.enoughData()).isFalse();
+        assertThat(relatorio.topics()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Deve separar os tópicos mais frágeis dos consolidados para a mensagem do aluno")
+    void deveSepararFrageisDeConsolidados() {
+        givenAggregates(
+                aggregate("Fragil", 10, 8),
+                aggregate("Consolidando", 10, 3),
+                aggregate("Dominado", 10, 0)
+        );
+        when(reviewAttemptRepository.totalsByStudent(eq(ALUNO), any()))
+                .thenReturn(new AttemptTotalsDto(30L, 19L));
+
+        StudentPerformanceReportDto relatorio = service.buildStudentReport(aluno());
+
+        assertThat(relatorio.weakestTopics(2)).extracting(TopicPerformanceDto::topic)
+                .containsExactly("Fragil", "Consolidando");
+        assertThat(relatorio.masteredTopics(2)).extracting(TopicPerformanceDto::topic)
+                .containsExactly("Dominado");
+    }
+
+    @Test
+    @DisplayName("Deve montar a visão agregada de todos os estudantes para a pesquisa")
+    void deveMontarAVisaoAgregada() {
+        when(reviewAttemptRepository.totalsOverall(any())).thenReturn(new AttemptTotalsDto(312L, 222L));
+        when(reviewAttemptRepository.countDistinctStudents(any())).thenReturn(7L);
+        when(reviewAttemptRepository.aggregateBySubject(any())).thenReturn(List.of(
+                new SubjectAttemptAggregateDto(FARMACO, "Farmacologia Clinica", 88L, 52L)));
+
+        PerformanceOverviewDto visao = service.buildOverview();
+
+        assertThat(visao.students()).isEqualTo(7);
+        assertThat(visao.totalAttempts()).isEqualTo(312);
+        assertThat(visao.overallAccuracy()).isEqualTo(222d / 312d);
+        assertThat(visao.windowDays()).isEqualTo(90);
+        assertThat(visao.bySubject()).singleElement()
+                .satisfies(disciplina -> assertThat(disciplina.accuracy()).isEqualTo(52d / 88d));
+    }
+
+    private Student aluno() {
+        Student student = Student.builder().fullName("Maria Silva").preferredName("Mari").build();
+        student.setId(ALUNO);
+        return student;
     }
 }

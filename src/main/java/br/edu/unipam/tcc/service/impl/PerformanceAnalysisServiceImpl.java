@@ -2,8 +2,11 @@ package br.edu.unipam.tcc.service.impl;
 
 import br.edu.unipam.tcc.config.AdaptiveProperties;
 import br.edu.unipam.tcc.dto.AttemptTotalsDto;
+import br.edu.unipam.tcc.dto.PerformanceOverviewDto;
+import br.edu.unipam.tcc.dto.StudentPerformanceReportDto;
 import br.edu.unipam.tcc.dto.TopicAttemptAggregateDto;
 import br.edu.unipam.tcc.dto.TopicPerformanceDto;
+import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.enums.TopicMastery;
 import br.edu.unipam.tcc.repository.ReviewAttemptRepository;
 import br.edu.unipam.tcc.service.PerformanceAnalysisService;
@@ -52,6 +55,38 @@ public class PerformanceAnalysisServiceImpl implements PerformanceAnalysisServic
     @Override
     public AttemptTotalsDto totals(UUID studentId) {
         return reviewAttemptRepository.totalsByStudent(studentId, windowStart());
+    }
+
+    @Override
+    public StudentPerformanceReportDto buildStudentReport(Student student) {
+        AttemptTotalsDto totals = totals(student.getId());
+        boolean enoughData = totals.attempts() >= adaptiveProperties.getReportMinAttempts();
+
+        return new StudentPerformanceReportDto(
+                student.getId(),
+                student.displayName(),
+                windowDays(),
+                totals.attempts(),
+                totals.correctAttempts(),
+                totals.accuracy(),
+                enoughData,
+                analyzeTopics(student.getId())
+        );
+    }
+
+    @Override
+    public PerformanceOverviewDto buildOverview() {
+        LocalDateTime since = windowStart();
+        AttemptTotalsDto totals = reviewAttemptRepository.totalsOverall(since);
+
+        return new PerformanceOverviewDto(
+                windowDays(),
+                reviewAttemptRepository.countDistinctStudents(since),
+                totals.attempts(),
+                totals.correctAttempts(),
+                totals.accuracy(),
+                reviewAttemptRepository.aggregateBySubject(since)
+        );
     }
 
     @Override

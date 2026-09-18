@@ -15,6 +15,7 @@ import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
 import br.edu.unipam.tcc.entity.enums.TopicMastery;
+import br.edu.unipam.tcc.flow.StudentPerformanceFlowHandler;
 import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.repository.CourseRepository;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
@@ -84,6 +85,7 @@ class ChatFlowOrchestratorImplTest {
     @Mock private StudentOnboardingService studentOnboardingService;
     @Mock private MmeebbMetrics mmeebbMetrics;
     @Mock private StudentSettingsFlowHandler studentSettingsFlowHandler;
+    @Mock private StudentPerformanceFlowHandler studentPerformanceFlowHandler;
     // 02:30 UTC do dia 18 equivale a 23:30 do dia 17 em Brasília: prova que a data vem do fuso de São Paulo.
     @Spy private Clock clock = Clock.fixed(Instant.parse("2026-09-18T02:30:00Z"), ZoneId.of("America/Sao_Paulo"));
     @Mock private OutgoingMessagePublisher outgoingMessagePublisher;
@@ -654,6 +656,65 @@ class ChatFlowOrchestratorImplTest {
         verify(studentSettingsFlowHandler).open(session);
         assertNull(session.getCurrentFlashcardId());
         verify(answerEvaluationService, never()).evaluate(anyString(), any());
+    }
+
+    // =========================================================================
+    // Relatório de desempenho
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve abrir o relatório de desempenho pela opção 4 do menu")
+    void shouldOpenPerformanceReportFromMenuOption() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+
+        orchestrator.processIncomingMessage(message("4"));
+
+        verify(studentPerformanceFlowHandler).send(session, student);
+        verify(intentRouterService, never()).classify(anyString());
+    }
+
+    @ParameterizedTest(name = "\"{0}\"")
+    @DisplayName("Deve abrir o desempenho por palavra-chave em qualquer estado após o cadastro")
+    @ValueSource(strings = {"desempenho", "meu desempenho", "progresso", "estatísticas", "como estou"})
+    void shouldOpenPerformanceReportFromGlobalKeyword(String keyword) {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+
+        orchestrator.processIncomingMessage(message(keyword));
+
+        verify(studentPerformanceFlowHandler).send(session, student);
+        verify(answerEvaluationService, never()).evaluate(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("Deve abrir o desempenho quando a intenção classificada for SHOW_PERFORMANCE")
+    void shouldOpenPerformanceReportFromIntent() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(intentRouterService.classify("será que estou melhorando?"))
+                .thenReturn(IntentResultDto.of(ChatIntent.SHOW_PERFORMANCE));
+
+        orchestrator.processIncomingMessage(message("será que estou melhorando?"));
+
+        verify(studentPerformanceFlowHandler).send(session, student);
+    }
+
+    @Test
+    @DisplayName("O menu principal deve anunciar a opção de desempenho")
+    void mainMenuShouldAnnouncePerformanceOption() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("menu"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("*3* - ⚙️ Configurações"));
+        assertTrue(sent.contains("*4* - 📊 Meu desempenho"));
     }
 
     @ParameterizedTest(name = "estado {0}")

@@ -1,6 +1,7 @@
 package br.edu.unipam.tcc.dto;
 
 import br.edu.unipam.tcc.entity.enums.TopicMastery;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Desempenho do estudante em um tópico dentro da janela de análise, já classificado.
@@ -25,6 +26,7 @@ public record TopicPerformanceDto(
     }
 
     /** Maior intervalo que um cartão deste tópico pode alcançar hoje: 2^(teto de N). */
+    @JsonProperty("maxIntervalDays")
     public int maxIntervalDays() {
         return 1 << mastery.maxNIndex();
     }

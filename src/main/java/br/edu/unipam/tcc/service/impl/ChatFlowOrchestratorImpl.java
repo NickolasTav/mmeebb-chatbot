@@ -12,6 +12,7 @@ import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.flow.StudentPerformanceFlowHandler;
 import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
@@ -77,6 +78,12 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             "config", "ajustes", "preferências", "preferencias", "/config"
     );
 
+    private static final Set<String> PERFORMANCE_COMMANDS = Set.of(
+            "desempenho", "meu desempenho", "progresso", "meu progresso",
+            "estatísticas", "estatisticas", "stats", "como estou", "como estou indo",
+            "/desempenho", "/stats"
+    );
+
     private final ChatSessionStore chatSessionStore;
     private final StudentRepository studentRepository;
     private final StudentCourseRepository studentCourseRepository;
@@ -91,6 +98,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final StudentOnboardingService studentOnboardingService;
     private final MmeebbMetrics mmeebbMetrics;
     private final StudentSettingsFlowHandler studentSettingsFlowHandler;
+    private final StudentPerformanceFlowHandler studentPerformanceFlowHandler;
     private final Clock clock;
     private final OutgoingMessagePublisher outgoingMessagePublisher;
 
@@ -133,6 +141,10 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             if (SETTINGS_COMMANDS.contains(lowerText)) {
                 session.clearReviewContext();
                 studentSettingsFlowHandler.open(session);
+                return;
+            }
+            if (PERFORMANCE_COMMANDS.contains(lowerText)) {
+                sendPerformanceReport(session);
                 return;
             }
         }
@@ -344,6 +356,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 studentSettingsFlowHandler.open(session);
                 return;
             }
+            case "4" -> {
+                mmeebbMetrics.recordAiInteraction("intent_router", "fast_path");
+                sendPerformanceReport(session);
+                return;
+            }
             default -> { /* texto livre: segue para a classificação de intenção */ }
         }
 
@@ -353,6 +370,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         switch (intent.intent()) {
             case START_REVIEW -> startReviewMode(session);
             case OPEN_SETTINGS -> studentSettingsFlowHandler.open(session);
+            case SHOW_PERFORMANCE -> sendPerformanceReport(session);
             case SHOW_MENU -> sendMainMenu(session);
             case EXIT -> handleExitCommand(session);
             case ASK_DOUBT -> {
@@ -628,6 +646,10 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         send(session, menuBody());
     }
 
+    private void sendPerformanceReport(ChatSessionState session) {
+        studentPerformanceFlowHandler.send(session, loadStudent(session));
+    }
+
     private String menuBody() {
         return """
                 📋 *Menu Principal — Chatbot MMEEBB*
@@ -635,6 +657,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 *1* - 📚 Revisar (método MMEEBB)
                 *2* - 💡 Tirar uma dúvida
                 *3* - ⚙️ Configurações _(nome, horário do lembrete, curso)_
+                *4* - 📊 Meu desempenho _(onde você mais erra e como ajusto suas revisões)_
 
                 _Digite o número, escreva o que precisa ou envie *sair* para encerrar._""";
     }

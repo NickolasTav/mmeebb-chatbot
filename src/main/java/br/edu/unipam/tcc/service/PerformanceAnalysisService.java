@@ -1,7 +1,10 @@
 package br.edu.unipam.tcc.service;
 
 import br.edu.unipam.tcc.dto.AttemptTotalsDto;
+import br.edu.unipam.tcc.dto.PerformanceOverviewDto;
+import br.edu.unipam.tcc.dto.StudentPerformanceReportDto;
 import br.edu.unipam.tcc.dto.TopicPerformanceDto;
+import br.edu.unipam.tcc.entity.Student;
 
 import java.util.List;
 import java.util.UUID;
@@ -30,6 +33,12 @@ public interface PerformanceAnalysisService {
 
     /** Totais de tentativas e acertos do estudante na janela de análise. */
     AttemptTotalsDto totals(UUID studentId);
+
+    /** Relatório completo de um estudante, para a mensagem do WhatsApp e o endpoint de pesquisa. */
+    StudentPerformanceReportDto buildStudentReport(Student student);
+
+    /** Visão agregada de todos os estudantes, insumo da seção de resultados da monografia. */
+    PerformanceOverviewDto buildOverview();
 
     /** Quantidade de dias considerada na análise, exibida ao estudante junto dos percentuais. */
     int windowDays();

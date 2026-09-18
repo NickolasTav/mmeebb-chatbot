@@ -27,6 +27,7 @@
 - [1. Visão Geral e Problema](#1-visão-geral-e-problema)
 - [2. Fundamentação Teórica](#2-fundamentação-teórica)
 - [3. O Algoritmo MMEEBB ($2^n$)](#3-o-algoritmo-mmeebb-2n)
+- [3.1. Personalização Adaptativa por Desempenho](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo)
 - [4. Arquitetura da Solução](#4-arquitetura-da-solução)
 - [5. Modelagem de Dados & DER](#5-modelagem-de-dados--der)
 - [6. Stack Tecnológica](#6-stack-tecnológica)
@@ -46,6 +47,8 @@ Estudantes de graduações densas — em especial os cursos de **Medicina** dura
 2. **Declínio Rápido da Retenção:** Conhecimentos clínicos e diagnósticos complexos são rapidamente esquecidos se não forem reforçados ativamente em intervalos matematicamente dosados.
 
 Este projeto propõe e implementa um **Chatbot Inteligente no WhatsApp** que automatiza o agendamento de revisões ativas com o método **MMEEBB**, atua como um **Preceptor/Tutor Médico Virtual via IA Generativa (Google Gemini + RAG)** e elimina toda a fricção de uso ao entregar os questionamentos diretamente no canal de comunicação mais acessado pelo estudante.
+
+O sistema vai além do cálculo fixo de intervalo: ele **mede em quais conteúdos cada aluno erra mais e ajusta as revisões a isso**, encurtando o ciclo dos tópicos frágeis, priorizando-os na fila do dia e antecipando questões relacionadas após um erro — sem abandonar a base binária do método (ver [seção 3.1](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo)).
 
 ---
 
@@ -97,6 +100,65 @@ stateDiagram-v2
 
 ---
 
+## 3.1. Personalização Adaptativa por Desempenho (MMEEBB Adaptativo)
+
+O MMEEBB clássico aplica exatamente a mesma progressão a todo aluno e a todo conteúdo. Na prática, um interno que erra sistematicamente *antibioticoterapia* e acerta sempre *semiologia cardíaca* recebia o mesmo tratamento nos dois assuntos. A camada adaptativa corrige isso **sem abandonar a base binária**: o intervalo continua sendo exatamente $2^n$ — o que muda é **até onde $n$ pode crescer** e **o tamanho do recuo no erro**.
+
+### Como o sistema descobre onde o aluno erra
+
+Cada resposta corrigida vira um evento em `tb_review_attempt` (com o $n$ antes, o $n$ depois e o domínio vigente). A partir desse histórico, o sistema calcula a **taxa de erro por tópico** dentro de uma janela móvel (padrão: 90 dias) e classifica o domínio:
+
+| Taxa de erro no tópico | Domínio | $N_{max}$ | Intervalo máximo |
+| :--- | :--- | :---: | :--- |
+| amostra < 3 respostas | `SEM_DADOS` | 13 | 8192 dias *(MMEEBB clássico)* |
+| $\ge 50\%$ | `FRAGIL` | 3 | **8 dias** |
+| $20\%$ a $50\%$ | `EM_CONSOLIDACAO` | 6 | **64 dias** |
+| $< 20\%$ | `DOMINADO` | 13 | 8192 dias *(MMEEBB clássico)* |
+
+A unidade de análise é o **tópico**, não o cartão: "o conteúdo em que o aluno erra mais" é um assunto, e uma questão nova de um tópico frágil já nasce tratada como frágil. O desempenho de um cartão isolado já está representado pelo próprio $n$.
+
+### A fórmula adaptativa
+
+$$n' = \min\big(\max(\text{candidato},\ 0),\ \min(13,\ N_{max})\big), \qquad \text{IRA} = 2^{n'}$$
+
+$$\text{candidato} = \begin{cases} n + 1 & \text{acerto} \\ n - 2 & \text{erro em tópico } \texttt{DOMINADO} \\ 0 & \text{erro nos demais casos} \end{cases}$$
+
+> **Degradação graciosa:** com `SEM_DADOS` o teto é o próprio 13 e a fórmula colapsa em $n+1$ / $0$ — o MMEEBB original, bit a bit. Um teste percorre $n = 0 \dots 13$, em acerto e em erro, provando essa equivalência. Sem evidência de desempenho, **não há personalização alguma**.
+
+```mermaid
+flowchart LR
+    R[Resposta corrigida] --> H[(tb_review_attempt)]
+    H --> C{Taxa de erro<br/>no tópico}
+    C -->|>= 50%| F[FRAGIL<br/>teto 8 dias]
+    C -->|20% a 50%| E[EM_CONSOLIDACAO<br/>teto 64 dias]
+    C -->|< 20%| D[DOMINADO<br/>lapso recua 2 casas]
+    C -->|amostra < 3| S[SEM_DADOS<br/>MMEEBB clássico]
+    F --> P[Fila do dia priorizada<br/>pelos tópicos frágeis]
+    F --> RF[Reforço dirigido:<br/>antecipa questões do tópico]
+```
+
+### As quatro decisões adaptativas
+
+1. **Teto por domínio** — enquanto o tópico for frágil, o cartão não escapa do ciclo curto, por mais que o aluno acerte. Ele volta a subir sozinho quando a taxa de erro do tópico cair.
+2. **Lapso graduado** — errar um cartão de tópico dominado recua duas casas ($64 \to 16$ dias) em vez de zerar: um deslize isolado não apaga meses de consolidação. O reset total continua valendo em todos os outros casos.
+3. **Fila priorizada** — entre as revisões vencidas do dia, os tópicos mais frágeis vêm primeiro. Importa porque o interno cansado costuma responder só as primeiras questões da sessão (limite de ~4 *chunks* de Cowan).
+4. **Reforço dirigido** — ao errar em tópico frágil, o sistema antecipa até 2 questões **do mesmo tópico** para o dia. O limite se auto-regula contando quantas já estão vencidas, então errar várias vezes seguidas não gera uma fila infinita.
+
+### Onde a IA entra (e onde não entra)
+
+| Etapa | Responsável | Por quê |
+| :--- | :--- | :--- |
+| Corrigir a resposta dissertativa | 🤖 Gemini | É o sinal que alimenta todo o resto |
+| Classificar o domínio do tópico | ⚙️ Determinístico | Precisa ser reprodutível e auditável diante da banca |
+| Decidir o intervalo | ⚙️ Determinístico | É o algoritmo do TCC; precisa ser verificável |
+| Explicar o desempenho ao aluno | 🤖 Gemini | Linguagem natural é onde o modelo agrega |
+
+Toda decisão que diverge do MMEEBB clássico é **explicada na própria mensagem** do WhatsApp — um intervalo que encurta depois de um acerto, sem justificativa, seria lido pelo aluno como defeito do sistema.
+
+> A camada inteira pode ser desligada com `MMEEBB_ADAPTIVE_ENABLED=false`, o que devolve o sistema ao MMEEBB clássico. Além de servir de contingência, isso habilita a comparação experimental *clássico × adaptativo* na monografia.
+
+---
+
 ## 4. Arquitetura da Solução
 
 O sistema foi concebido sob o padrão **Direct-to-Queue Messaging** e **Arquitetura em Camadas Enterprise**, garantindo isolamento assíncrono, proteção contra sobrecargas e tolerância a falhas.
@@ -116,8 +178,11 @@ flowchart TB
         CONS --> ORCH[ChatFlowOrchestrator]
         
         ORCH -->|1. Fast Path Menus & Comandos| FSM[Máquina de Estados Finita]
-        ORCH -->|2. Avaliação de Respostas MMEEBB| MMEEBB[MmeebbService 2^n]
+        ORCH -->|2. Avaliação de Respostas| ADAPT[AdaptiveReviewService]
+        ADAPT --> ANALYSIS[PerformanceAnalysisService<br/>domínio por tópico]
+        ADAPT --> MMEEBB[MmeebbService 2^n<br/>com teto adaptativo]
         ORCH -->|3. Dúvidas Clínicas & RAG| RAG[SubjectRagService + Gemini]
+        ORCH -->|4. Relatório de Desempenho| PERF[StudentPerformanceFlowHandler]
         
         SCHED[DailyReviewNotificationScheduler] -->|Rodada 5min: horário de cada aluno| Q_OUT[whatsapp.outgoing.queue]
         Q_OUT -->|Rate Limit + Anti-Ban + Composing| OUT_CONS[WhatsappOutgoingConsumer]
@@ -164,6 +229,7 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 | **📚 START_REVIEW** | `1`, ou texto livre como *"quero estudar um pouco"* | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
 | **💡 ASK_DOUBT** | `2`, ou qualquer pergunta de conteúdo | Responde via RAG. Se a mensagem citar uma disciplina (*"dúvida de cardiologia"*), a busca é particionada por `subject_id`. |
 | **⚙️ OPEN_SETTINGS** | `3`, `configurações`, `config`, `ajustes`, ou *"quero mudar meu horário"* | Abre o menu de Configurações (nome de tratamento, horário do lembrete, pausar lembretes, curso e período). |
+| **📊 SHOW_PERFORMANCE** | `4`, `desempenho`, `progresso`, `estatísticas`, `como estou`, ou *"será que estou melhorando?"* | Envia o relatório de desempenho: taxa de acerto, tópicos em que mais erra (com o teto de intervalo ativo em cada um), conteúdos consolidados e a leitura do preceptor virtual. |
 | **📋 SHOW_MENU** | `menu`, `oi`, `bom dia`, `ajuda` | Reexibe o menu principal. |
 | **🚪 EXIT** | `sair`, `tchau`, `encerrar`, `flw`, `/sair` | Finaliza a sessão com despedida e limpa o card ativo. |
 
@@ -172,6 +238,8 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 #### Correção das respostas
 
 Múltipla escolha é resolvida por comparação direta e também aceita a letra da alternativa colada por extenso pelo aluno (`"A) Inibidor de SGLT2..."`); respostas dissertativas passam por **correção semântica via Gemini**, que aceita o conceito correto expresso com palavras próprias e devolve um comentário pedagógico curto.
+
+O resultado dessa correção não é descartado: ele vira um evento em `tb_review_attempt` e alimenta a [personalização adaptativa](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo). Pedidos de ajuda (*"não entendi, pode explicar?"*) são detectados como dúvida, respondidos pelo RAG e **não contam como erro** — contabilizá-los puniria justamente quem pede explicação.
 
 ### 4.2. Resiliência do Gemini (Retry & Failover Automático)
 
@@ -195,6 +263,8 @@ erDiagram
     SUBJECT ||--o{ FLASHCARD : categoriza
     STUDENT ||--o{ REPETITION_SCHEDULE : revisa
     FLASHCARD ||--o{ REPETITION_SCHEDULE : agendado_em
+    STUDENT ||--o{ REVIEW_ATTEMPT : responde
+    FLASHCARD ||--o{ REVIEW_ATTEMPT : registrado_em
     STUDENT ||--o{ CHAT_SESSION : mantem
     COURSE ||--o{ KNOWLEDGE_EMBEDDING : escopo
     SUBJECT ||--o{ KNOWLEDGE_EMBEDDING : escopo
@@ -251,6 +321,17 @@ erDiagram
         date next_review_date
         string status "PENDING | COMPLETED"
         bigint version "Lock Otimista"
+    }
+    REVIEW_ATTEMPT {
+        bigint id PK
+        uuid student_id FK
+        bigint flashcard_id FK
+        boolean correct
+        int n_index_before "N antes da decisao"
+        int n_index_after "N depois da decisao"
+        int interval_days_after "2^n aplicado"
+        string topic_mastery "SEM_DADOS | FRAGIL | EM_CONSOLIDACAO | DOMINADO"
+        timestamp answered_at
     }
     CHAT_SESSION {
         uuid id PK
@@ -367,6 +448,27 @@ curl.exe -i -X POST "http://localhost:8080/api/admin/rag/ingest" `
 
 O texto é segmentado (300 tokens, overlap de 30) e cada trecho recebe `course_id`, `subject_id` e `topic`. A API valida que a disciplina informada pertence de fato ao curso informado.
 
+#### Acompanhando o desempenho do grupo piloto
+
+Os dois endpoints abaixo expõem os dados de retenção que embasam a seção de resultados da monografia — o mesmo diagnóstico que o aluno vê no WhatsApp, em formato consultável:
+
+```powershell
+# Perfil individual: taxa de acerto, tópicos frágeis e o teto de intervalo ativo em cada um
+curl.exe -s "http://localhost:8080/api/admin/performance/students/<UUID>" -H "api_key: teste"
+
+# Visão agregada de todos os estudantes, com desempenho por disciplina
+curl.exe -s "http://localhost:8080/api/admin/performance/overview" -H "api_key: teste"
+```
+
+```json
+{
+  "windowDays": 90, "students": 7, "totalAttempts": 312, "overallAccuracy": 0.7115,
+  "bySubject": [
+    { "subjectId": 4, "subjectName": "Farmacologia Clínica", "attempts": 88, "accuracy": 0.5909 }
+  ]
+}
+```
+
 ### Passo 4: Conectar o WhatsApp (túnel, QR Code e webhook)
 
 Suba o túnel (o painel ainda não inicia o processo do Ngrok sozinho, só detecta um já rodando):
@@ -399,6 +501,13 @@ ngrok http 8080
 | `SPRING_REDIS_PASSWORD` | *(Vazio)* | Senha do Redis, se houver |
 | `MMEEBB_SESSION_TTL_MINUTES` | `60` | Tempo de expiração da sessão conversacional no Redis |
 | `MMEEBB_SCHEDULER_CRON` | `0 */5 * * * *` | Frequência das rodadas de lembrete; cada aluno recebe no horário definido em Configurações |
+| `MMEEBB_ADAPTIVE_ENABLED` | `true` | Liga a [personalização adaptativa](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo). `false` devolve o sistema ao MMEEBB clássico — útil para a comparação experimental na monografia |
+| `MMEEBB_ADAPTIVE_WINDOW_DAYS` | `90` | Janela de análise do desempenho: um mês ruim não marca o tópico para sempre |
+| `MMEEBB_ADAPTIVE_MIN_ATTEMPTS` | `3` | Respostas mínimas no tópico antes de personalizar qualquer coisa |
+| `MMEEBB_ADAPTIVE_FRAGILE_ERROR_RATE` | `0.50` | Taxa de erro que classifica o tópico como frágil (teto de 8 dias) |
+| `MMEEBB_ADAPTIVE_CONSOLIDATING_ERROR_RATE` | `0.20` | Taxa de erro que classifica o tópico como em consolidação (teto de 64 dias) |
+| `MMEEBB_ADAPTIVE_REINFORCEMENT_MAX_CARDS` | `2` | Questões do mesmo tópico antecipadas como reforço após erro em tópico frágil |
+| `MMEEBB_ADAPTIVE_REPORT_MIN_ATTEMPTS` | `5` | Respostas mínimas antes de exibir percentuais no relatório de desempenho |
 | `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi |
 | `UAZAPI_API_KEY` | *(Vazio)* | Token/Chave de autenticação da Uazapi |
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
@@ -454,13 +563,15 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 342
+- **Total de Testes Unitários:** 425
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso) e **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook).
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso), **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook) e **Personalização Adaptativa** (classificação de domínio por tópico, teto de intervalo, lapso graduado, fila priorizada, reforço dirigido e relatório de desempenho).
+
+> **Teste-chave do algoritmo:** `MmeebbServiceImplTest` percorre $n = 0 \dots 13$, em acerto e em erro, comparando a versão adaptativa sem histórico contra a clássica. É a prova executável de que a personalização **não descaracteriza o MMEEBB** — a contribuição central do trabalho permanece verificável.
 
 > O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
 
-> O teste `RepetitionScheduleRepositoryTest` sobe um **Postgres real com pgvector via Testcontainers** e aplica as migrations Flyway para validar o filtro de matrícula ativa — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, ele é ignorado automaticamente.
+> Os testes `RepetitionScheduleRepositoryTest` e `ReviewAttemptRepositoryTest` sobem um **Postgres real com pgvector via Testcontainers** e aplicam as migrations Flyway para validar o filtro de matrícula ativa, as consultas do reforço dirigido e as agregações de desempenho — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, eles são ignorados automaticamente.
 
 ---
 
@@ -473,14 +584,17 @@ c:\projeto-tcc
 │   ├── consumer/        # Consumidores AMQP (@RabbitListener)
 │   ├── controller/      # Endpoints REST e Webhooks (/webhook/uazapi)
 │   ├── dto/             # DTOs de transporte de dados e mapeamento Uazapi
-│   ├── entity/          # Entidades relacionais JPA (Course, Student, etc.)
-│   │   └── enums/       # ChatIntent, ChatState
+│   ├── entity/          # Entidades relacionais JPA (Course, Student, ReviewAttempt, etc.)
+│   │   └── enums/       # ChatIntent, ChatState, TopicMastery
 │   ├── exception/       # GlobalExceptionHandler e exceções de domínio
+│   ├── flow/            # Handlers conversacionais (Configurações, Meu desempenho)
+│   ├── observability/   # Métricas de domínio (Micrometer) e correlação de logs
 │   ├── repository/      # Repositórios Spring Data JPA
 │   ├── scheduler/       # Rotinas de disparo diário de revisões (@Scheduled)
 │   ├── session/         # FSM conversacional no Redis (ChatSessionStore, ChatSessionState)
 │   └── service/         # Interfaces e Implementações de regras de negócio
-│       └── impl/        # ChatFlowOrchestrator, MmeebbService, SubjectRagService, IntentRouterService...
+│       └── impl/        # ChatFlowOrchestrator, MmeebbService, AdaptiveReviewService,
+│                        # PerformanceAnalysisService, SubjectRagService, IntentRouterService...
 ├── src/main/java/dev/langchain4j/model/googleai/
 │   └── GeminiServiceCustomizer.java  # Timeout estendido + retry/failover 503/429 no cliente Gemini
 ├── src/main/resources/

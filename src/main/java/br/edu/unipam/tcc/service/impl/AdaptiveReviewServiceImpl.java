@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -89,7 +90,7 @@ public class AdaptiveReviewServiceImpl implements AdaptiveReviewService {
         }
 
         Map<String, TopicPerformanceDto> byTopic = performanceAnalysisService.analyzeTopics(studentId).stream()
-                .collect(java.util.stream.Collectors.toMap(
+                .collect(Collectors.toMap(
                         performance -> topicKey(performance.subjectId(), performance.topic()),
                         Function.identity(),
                         (first, second) -> first));

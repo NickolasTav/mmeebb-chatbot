@@ -92,6 +92,22 @@ class StudentPerformanceFlowHandlerTest {
     }
 
     @Test
+    @DisplayName("A mensagem não pode conter CRLF: o WhatsApp espera apenas \\n como quebra de linha")
+    void mensagemNaoPodeConterQuebraDeLinhaDoWindows() {
+        when(performanceAnalysisService.buildStudentReport(student)).thenReturn(
+                new StudentPerformanceReportDto(ALUNO, "Mari", 90, 48L, 31L, 0.6458, true, List.of(
+                        topic("Antibioticoterapia", 0.8, TopicMastery.FRAGIL),
+                        topic("Arritmias", 0.6, TopicMastery.FRAGIL),
+                        topic("Anti-hipertensivos", 0.1, TopicMastery.DOMINADO),
+                        topic("Semiologia", 0.05, TopicMastery.DOMINADO))));
+        when(performanceDiagnosisService.diagnose(any())).thenReturn(Optional.empty());
+
+        handler.send(session(ChatState.MAIN_MENU), student);
+
+        assertThat(mensagemEnviada()).doesNotContain("\r");
+    }
+
+    @Test
     @DisplayName("Deve anexar o diagnóstico do preceptor virtual quando a IA responder")
     void deveAnexarODiagnosticoDaIa() {
         when(performanceAnalysisService.buildStudentReport(student)).thenReturn(

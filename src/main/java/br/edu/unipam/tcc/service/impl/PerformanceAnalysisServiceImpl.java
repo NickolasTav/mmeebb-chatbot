@@ -11,7 +11,6 @@ import br.edu.unipam.tcc.entity.enums.TopicMastery;
 import br.edu.unipam.tcc.repository.ReviewAttemptRepository;
 import br.edu.unipam.tcc.service.PerformanceAnalysisService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -21,7 +20,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PerformanceAnalysisServiceImpl implements PerformanceAnalysisService {

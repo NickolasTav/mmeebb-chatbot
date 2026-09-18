@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -82,8 +83,14 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
 
-    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
-    public ResponseEntity<ApiErrorResponse> handleIllegalArgumentException(RuntimeException ex, HttpServletRequest request) {
+    /**
+     * {@code MethodArgumentTypeMismatchException} cobre o caminho da URL malformada — por exemplo,
+     * um UUID inválido em {@code /api/admin/performance/students/{id}}. Sem ela, um erro de digitação
+     * do cliente cairia no tratamento genérico e devolveria 500, mascarando o problema real.
+     */
+    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class,
+            MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<ApiErrorResponse> handleIllegalArgumentException(Exception ex, HttpServletRequest request) {
         log.warn("[GlobalExceptionHandler] Argumento ou estado inválido: {} (Path: {})", ex.getMessage(), request.getRequestURI());
         ApiErrorResponse response = new ApiErrorResponse(
                 LocalDateTime.now(),

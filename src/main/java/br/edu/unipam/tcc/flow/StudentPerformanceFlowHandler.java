@@ -74,7 +74,7 @@ public class StudentPerformanceFlowHandler {
         List<TopicPerformanceDto> weakest = report.weakestTopics(MAX_TOPICS_PER_GROUP);
         if (!weakest.isEmpty()) {
             StringBuilder block = new StringBuilder("🔴 *Onde você mais erra* _(revisão encurtada)_\n");
-            weakest.forEach(topic -> block.append(String.format("• _%s_ — %d%% de erro (reforço a cada %d dias no máximo)%n",
+            weakest.forEach(topic -> block.append(String.format("• _%s_ — %d%% de erro (reforço a cada %d dias no máximo)\n",
                     topic.topic(), topic.errorPercentage(), topic.maxIntervalDays())));
             message.add(block.toString().trim());
         }
@@ -82,7 +82,7 @@ public class StudentPerformanceFlowHandler {
         List<TopicPerformanceDto> mastered = report.masteredTopics(MAX_TOPICS_PER_GROUP);
         if (!mastered.isEmpty()) {
             StringBuilder block = new StringBuilder("🟢 *Conteúdos consolidados*\n");
-            mastered.forEach(topic -> block.append(String.format("• _%s_ — %d%% de erro%n",
+            mastered.forEach(topic -> block.append(String.format("• _%s_ — %d%% de erro\n",
                     topic.topic(), topic.errorPercentage())));
             message.add(block.toString().trim());
         }

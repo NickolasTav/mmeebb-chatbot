@@ -101,4 +101,11 @@ class AdminPerformanceControllerTest {
         mockMvc.perform(get("/api/admin/performance/overview"))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    @DisplayName("Deve devolver 400, e não 500, quando o identificador do estudante for inválido")
+    void deveDevolver400QuandoIdentificadorForInvalido() throws Exception {
+        mockMvc.perform(get("/api/admin/performance/students/{id}", "nao-e-um-uuid").header("api_key", API_KEY))
+                .andExpect(status().isBadRequest());
+    }
 }

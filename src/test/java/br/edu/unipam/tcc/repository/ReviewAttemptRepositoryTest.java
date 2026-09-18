@@ -180,6 +180,34 @@ class ReviewAttemptRepositoryTest {
         assertThat(reviewAttemptRepository.countDistinctStudents(INICIO_DA_JANELA)).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("Deve gravar a tentativa com estudante e flashcard destacados, como chega do consumidor")
+    void deveGravarComEntidadesDestacadas() {
+        Student destacado = Student.builder().build();
+        destacado.setId(maria.getId());
+        Flashcard cardDestacado = Flashcard.builder().build();
+        cardDestacado.setId(antibiotico.getId());
+
+        ReviewAttempt salva = reviewAttemptRepository.save(ReviewAttempt.builder()
+                .student(destacado)
+                .flashcard(cardDestacado)
+                .correct(false)
+                .nIndexBefore(6)
+                .nIndexAfter(4)
+                .intervalDaysAfter(16)
+                .topicMastery(TopicMastery.DOMINADO)
+                .answeredAt(AGORA.minusDays(1))
+                .build());
+
+        assertThat(salva.getId()).isNotNull();
+        assertThat(reviewAttemptRepository.aggregateByTopic(maria.getId(), INICIO_DA_JANELA))
+                .singleElement()
+                .satisfies(agregado -> {
+                    assertThat(agregado.topic()).isEqualTo("Antibioticoterapia");
+                    assertThat(agregado.errors()).isEqualTo(1);
+                });
+    }
+
     private void registrar(Student student, Flashcard flashcard, boolean correct, LocalDateTime answeredAt) {
         reviewAttemptRepository.save(ReviewAttempt.builder()
                 .student(student)

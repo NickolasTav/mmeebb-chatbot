@@ -67,7 +67,7 @@ public class StudentSettingsServiceImpl implements StudentSettingsService {
     public boolean updateStudyTime(UUID studentId, LocalTime studyTime) {
         Student student = loadStudent(studentId);
         student.setPreferredStudyTime(studyTime);
-        boolean firesToday = skipTodayIfTimeAlreadyPassed(student);
+        boolean firesToday = rearmForChosenTime(student, studyTime);
         studentRepository.save(student);
         return firesToday;
     }
@@ -118,8 +118,27 @@ public class StudentSettingsServiceImpl implements StudentSettingsService {
     }
 
     /**
-     * Um horário que já passou hoje só vale a partir de amanhã: marcar o dia como avaliado evita
-     * que a próxima rodada do scheduler dispare um lembrete logo depois de o aluno configurar.
+     * Escolher um horário que ainda vai chegar é um pedido explícito do aluno, então o lembrete vale
+     * hoje mesmo — inclusive para quem já recebeu o do dia, limpando a marca diária. Um horário que
+     * já passou só volta a valer amanhã, e marcar o dia evita um lembrete disparado na rodada
+     * seguinte, segundos depois de o aluno configurar.
+     *
+     * @return {@code true} se o lembrete ainda sai hoje
+     */
+    private boolean rearmForChosenTime(Student student, LocalTime studyTime) {
+        LocalDateTime now = LocalDateTime.now(clock);
+
+        if (studyTime.isAfter(now.toLocalTime())) {
+            student.setLastReviewNotificationOn(null);
+            return true;
+        }
+        student.setLastReviewNotificationOn(now.toLocalDate());
+        return false;
+    }
+
+    /**
+     * Reativar lembretes não escolhe horário novo, então mantém a regra de um lembrete por dia:
+     * se o horário do aluno já passou (ou ele já foi avaliado hoje), o próximo chega amanhã.
      *
      * @return {@code true} se o lembrete ainda pode sair hoje
      */

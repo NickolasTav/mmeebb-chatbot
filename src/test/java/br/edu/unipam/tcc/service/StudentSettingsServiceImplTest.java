@@ -169,11 +169,20 @@ class StudentSettingsServiceImplTest {
     }
 
     @Test
-    @DisplayName("Aluno já avaliado hoje não recebe segundo lembrete mesmo com horário futuro")
-    void naoDeveDispararSegundoLembreteNoMesmoDia() {
+    @DisplayName("Escolher horário futuro rearma o lembrete de hoje mesmo para quem já recebeu o do dia")
+    void deveRearmarLembreteDeHojeAoEscolherHorarioFuturo() {
         student.setLastReviewNotificationOn(TODAY);
 
-        assertFalse(service.updateStudyTime(student.getId(), LocalTime.of(20, 0)));
+        assertTrue(service.updateStudyTime(student.getId(), LocalTime.of(20, 0)));
+        assertNull(student.getLastReviewNotificationOn());
+    }
+
+    @Test
+    @DisplayName("Horário já passado continua valendo só amanhã, mesmo para quem ainda não recebeu hoje")
+    void deveAdiarParaAmanhaQuandoHorarioEscolhidoJaPassou() {
+        student.setLastReviewNotificationOn(null);
+
+        assertFalse(service.updateStudyTime(student.getId(), LocalTime.of(9, 0)));
         assertEquals(TODAY, student.getLastReviewNotificationOn());
     }
 

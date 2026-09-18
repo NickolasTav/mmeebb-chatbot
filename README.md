@@ -563,7 +563,7 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 425
+- **Total de Testes Unitários:** 428
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
 - **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso), **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook) e **Personalização Adaptativa** (classificação de domínio por tópico, teto de intervalo, lapso graduado, fila priorizada, reforço dirigido e relatório de desempenho).
 

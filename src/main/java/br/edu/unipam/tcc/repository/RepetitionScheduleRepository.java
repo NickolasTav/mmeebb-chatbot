@@ -95,4 +95,45 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
             @Param("currentDate") LocalDate currentDate,
             @Param("status") ScheduleStatus status
     );
+
+    /**
+     * Quantas questões do tópico já estão vencidas hoje. É o que limita o reforço dirigido:
+     * um tópico que já lotou a fila do dia não recebe antecipações adicionais.
+     */
+    @Query("SELECT COUNT(s) FROM RepetitionSchedule s " +
+           "WHERE s.student.id = :studentId " +
+           "AND s.flashcard.subject.id = :subjectId " +
+           "AND s.flashcard.topic = :topic " +
+           "AND s.nextReviewDate <= :currentDate " +
+           "AND s.flashcard.active = true " +
+           "AND s.status <> 'COMPLETED' " +
+           ACTIVE_ENROLLMENT_FILTER)
+    long countDueSchedulesByTopic(
+            @Param("studentId") UUID studentId,
+            @Param("subjectId") Long subjectId,
+            @Param("topic") String topic,
+            @Param("currentDate") LocalDate currentDate
+    );
+
+    /**
+     * Questões do mesmo tópico ainda agendadas para o futuro, candidatas a serem antecipadas como
+     * reforço depois de um erro. A ordem traz primeiro as que já estavam mais próximas de vencer.
+     */
+    @Query("SELECT s FROM RepetitionSchedule s " +
+           "JOIN FETCH s.flashcard f " +
+           "JOIN FETCH f.subject sub " +
+           "WHERE s.student.id = :studentId " +
+           "AND sub.id = :subjectId " +
+           "AND f.topic = :topic " +
+           "AND s.nextReviewDate > :currentDate " +
+           "AND f.active = true " +
+           "AND s.status <> 'COMPLETED' " +
+           ACTIVE_ENROLLMENT_FILTER +
+           "ORDER BY s.nextReviewDate ASC")
+    List<RepetitionSchedule> findFutureSchedulesByTopic(
+            @Param("studentId") UUID studentId,
+            @Param("subjectId") Long subjectId,
+            @Param("topic") String topic,
+            @Param("currentDate") LocalDate currentDate
+    );
 }

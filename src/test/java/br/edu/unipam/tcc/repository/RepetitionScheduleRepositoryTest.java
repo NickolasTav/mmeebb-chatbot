@@ -132,4 +132,50 @@ class RepetitionScheduleRepositoryTest {
 
         assertThat(pendingCourseCodes()).containsExactly("IT_MED");
     }
+
+    // =========================================================================
+    // Consultas do reforço dirigido (camada adaptativa)
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve separar os cartões do tópico já vencidos dos ainda agendados para o futuro")
+    void deveSepararCartoesVencidosDosFuturosPorTopico() {
+        enroll(medicina, true);
+        Subject farmacologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_FARMACO").name("Farmacologia IT").build());
+
+        scheduleFor(farmacologia, "Antibioticoterapia", TODAY);
+        RepetitionSchedule futuroProximo = scheduleFor(farmacologia, "Antibioticoterapia", TODAY.plusDays(4));
+        RepetitionSchedule futuroDistante = scheduleFor(farmacologia, "Antibioticoterapia", TODAY.plusDays(30));
+        scheduleFor(farmacologia, "Anti-hipertensivos", TODAY.plusDays(2));
+
+        assertThat(repetitionScheduleRepository
+                .countDueSchedulesByTopic(student.getId(), farmacologia.getId(), "Antibioticoterapia", TODAY))
+                .isEqualTo(1);
+
+        assertThat(repetitionScheduleRepository
+                .findFutureSchedulesByTopic(student.getId(), farmacologia.getId(), "Antibioticoterapia", TODAY))
+                .extracting(RepetitionSchedule::getId)
+                .containsExactly(futuroProximo.getId(), futuroDistante.getId());
+    }
+
+    @Test
+    @DisplayName("O reforço dirigido não deve alcançar cartões de curso sem matrícula ativa")
+    void reforcoNaoDeveAlcancarCursoSemMatriculaAtiva() {
+        enroll(medicina, false);
+        Subject farmacologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_FARMACO").name("Farmacologia IT").build());
+        scheduleFor(farmacologia, "Antibioticoterapia", TODAY.plusDays(4));
+
+        assertThat(repetitionScheduleRepository
+                .findFutureSchedulesByTopic(student.getId(), farmacologia.getId(), "Antibioticoterapia", TODAY))
+                .isEmpty();
+    }
+
+    private RepetitionSchedule scheduleFor(Subject subject, String topic, LocalDate nextReviewDate) {
+        Flashcard card = flashcardRepository.save(Flashcard.builder()
+                .subject(subject).topic(topic).question("Pergunta " + topic).answer("Resposta").build());
+        return repetitionScheduleRepository.save(RepetitionSchedule.builder()
+                .student(student).flashcard(card).nextReviewDate(nextReviewDate).build());
+    }
 }

@@ -58,4 +58,28 @@ class MmeebbMetricsTest {
         assertEquals(1.0, registry.counter("med_mmeebb_ai_interactions_total",
                 "source", "answer_evaluation", "path", "fast_path").count());
     }
+
+    @Test
+    @DisplayName("Deve registrar a decisao adaptativa por nivel de dominio e acao")
+    void deveRegistrarDecisaoAdaptativa() {
+        metrics.recordAdaptiveDecision("FRAGIL", "interval_capped");
+        metrics.recordAdaptiveDecision("DOMINADO", "lapse_softened");
+        metrics.recordAdaptiveDecision(null, "classic");
+
+        assertEquals(1.0, registry.counter("med_mmeebb_adaptive_decisions_total",
+                "mastery", "FRAGIL", "action", "interval_capped").count());
+        assertEquals(1.0, registry.counter("med_mmeebb_adaptive_decisions_total",
+                "mastery", "DOMINADO", "action", "lapse_softened").count());
+        assertEquals(1.0, registry.counter("med_mmeebb_adaptive_decisions_total",
+                "mastery", "unknown", "action", "classic").count());
+    }
+
+    @Test
+    @DisplayName("Deve somar as questoes antecipadas como reforco dirigido")
+    void deveRegistrarReforcoDirigido() {
+        metrics.recordAdaptiveReinforcement(2);
+        metrics.recordAdaptiveReinforcement(1);
+
+        assertEquals(3.0, registry.counter("med_mmeebb_adaptive_reinforcements_total").count());
+    }
 }

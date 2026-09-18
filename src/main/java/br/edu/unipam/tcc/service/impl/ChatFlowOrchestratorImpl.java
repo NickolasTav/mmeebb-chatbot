@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.service.impl;
 
+import br.edu.unipam.tcc.dto.AdaptiveReviewOutcomeDto;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
@@ -20,10 +21,10 @@ import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentCourseRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
 import br.edu.unipam.tcc.repository.SubjectRepository;
+import br.edu.unipam.tcc.service.AdaptiveReviewService;
 import br.edu.unipam.tcc.service.AnswerEvaluationService;
 import br.edu.unipam.tcc.service.ChatFlowOrchestrator;
 import br.edu.unipam.tcc.service.IntentRouterService;
-import br.edu.unipam.tcc.service.MmeebbService;
 import br.edu.unipam.tcc.service.StudentOnboardingService;
 import br.edu.unipam.tcc.service.SubjectRagService;
 import br.edu.unipam.tcc.session.ChatSessionState;
@@ -36,6 +37,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -82,7 +84,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final SubjectRepository subjectRepository;
     private final FlashcardRepository flashcardRepository;
     private final RepetitionScheduleRepository repetitionScheduleRepository;
-    private final MmeebbService mmeebbService;
+    private final AdaptiveReviewService adaptiveReviewService;
     private final SubjectRagService subjectRagService;
     private final IntentRouterService intentRouterService;
     private final AnswerEvaluationService answerEvaluationService;
@@ -439,12 +441,9 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             return;
         }
 
-        RepetitionSchedule schedule = repetitionScheduleRepository
-                .findByStudentIdAndFlashcardId(student.getId(), card.getId())
-                .orElseGet(() -> mmeebbService.initializeSchedule(student, card, LocalDate.now(clock)));
-
-        RepetitionSchedule updated = mmeebbService.processAnswer(schedule, evaluation.correct(), LocalDateTime.now(clock));
-        repetitionScheduleRepository.save(updated);
+        AdaptiveReviewOutcomeDto outcome = adaptiveReviewService.processAnswer(
+                student, card, evaluation.correct(), LocalDateTime.now(clock));
+        RepetitionSchedule updated = outcome.schedule();
 
         StringBuilder feedback = new StringBuilder();
         if (evaluation.correct()) {
@@ -454,8 +453,13 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         } else {
             feedback.append("❌ *Resposta incorreta.*\n")
                     .append("Gabarito: *").append(card.getAnswer()).append("*\n")
-                    .append("Intervalo reiniciado para *1 dia* (N=0) para consolidação.\n\n");
+                    .append(outcome.lapseSoftened()
+                            ? "Intervalo recuado para *" + updated.getIntervalDays()
+                              + " dia(s)* (N=" + updated.getNIndex() + ").\n\n"
+                            : "Intervalo reiniciado para *1 dia* (N=0) para consolidação.\n\n");
         }
+
+        feedback.append(adaptiveNote(outcome, card));
 
         if (evaluation.feedback() != null && !evaluation.feedback().isBlank()) {
             feedback.append("🧠 *Correção:* ").append(evaluation.feedback()).append("\n\n");
@@ -512,9 +516,44 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 %s""", ragAnswer, formatFlashcard(card)));
     }
 
+    /**
+     * Explica, na própria mensagem, toda decisão que divergiu do MMEEBB clássico. Sem isso, um
+     * intervalo que encurta depois de um acerto seria lido pelo aluno como defeito do sistema.
+     */
+    private String adaptiveNote(AdaptiveReviewOutcomeDto outcome, Flashcard card) {
+        List<String> notes = new ArrayList<>();
+        int errorPercentage = outcome.performance().errorPercentage();
+
+        if (outcome.intervalCapped()) {
+            notes.add(String.format(
+                    "🎯 *Ajuste personalizado:* _%s_ ainda está entre seus pontos frágeis (%d%% de erro), "
+                            + "então seguro o reforço em *%d dia(s)* em vez de dobrar o intervalo.",
+                    card.getTopic(), errorPercentage, outcome.schedule().getIntervalDays()));
+        } else if (outcome.lapseSoftened()) {
+            notes.add(String.format(
+                    "🎯 *Ajuste personalizado:* como você domina _%s_ (%d%% de erro), tratei isto como um lapso: "
+                            + "o ciclo recuou em vez de voltar à estaca zero.",
+                    card.getTopic(), errorPercentage));
+        }
+
+        if (outcome.reinforcedCards() > 0) {
+            notes.add(String.format(
+                    "🔁 *Reforço dirigido:* trouxe *%d* questão(ões) de _%s_ para hoje, "
+                            + "porque é onde você mais erra.",
+                    outcome.reinforcedCards(), card.getTopic()));
+        }
+
+        return notes.isEmpty() ? "" : String.join("\n\n", notes) + "\n\n";
+    }
+
+    /**
+     * As revisões vencidas passam pela camada adaptativa antes de chegar ao aluno: os tópicos mais
+     * frágeis vêm primeiro, porque a sessão costuma ser interrompida antes do fim.
+     */
     private List<RepetitionSchedule> findPendingReviews(java.util.UUID studentId) {
-        return repetitionScheduleRepository.findPendingReviewsByStudent(
+        List<RepetitionSchedule> pending = repetitionScheduleRepository.findPendingReviewsByStudent(
                 studentId, LocalDate.now(clock), ScheduleStatus.PENDING);
+        return adaptiveReviewService.prioritize(studentId, pending);
     }
 
     private long countPendingReviews(java.util.UUID studentId) {

@@ -39,4 +39,24 @@ public class MmeebbMetrics {
                 .register(registry)
                 .increment();
     }
+
+    /**
+     * Quantas revisoes foram decididas em cada nivel de dominio e com qual acao adaptativa
+     * (teto aplicado, lapso amortecido ou comportamento classico). Permite medir, no piloto,
+     * o quanto a personalizacao realmente altera o MMEEBB original.
+     */
+    public void recordAdaptiveDecision(String mastery, String action) {
+        Counter.builder("med_mmeebb_adaptive_decisions_total")
+                .tag("mastery", mastery == null ? "unknown" : mastery)
+                .tag("action", action)
+                .register(registry)
+                .increment();
+    }
+
+    /** Questoes antecipadas como reforco dirigido apos erro em topico fragil. */
+    public void recordAdaptiveReinforcement(int cards) {
+        Counter.builder("med_mmeebb_adaptive_reinforcements_total")
+                .register(registry)
+                .increment(cards);
+    }
 }

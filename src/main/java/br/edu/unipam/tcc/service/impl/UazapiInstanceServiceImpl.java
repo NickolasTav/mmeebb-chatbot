@@ -30,6 +30,9 @@ import java.util.UUID;
 @Service
 public class UazapiInstanceServiceImpl implements UazapiInstanceService {
 
+    private static final String LAST_SYNCED_WEBHOOK_KEY = "webhook.last-synced-url";
+    private static final List<String> INSTANCE_CREDENTIAL_KEYS = List.of("uazapi.instance", "uazapi.api-key");
+
     private final RestClient restClient;
     private final SystemConfigurationRepository configRepository;
     private final String defaultBaseUrl;
@@ -157,14 +160,14 @@ public class UazapiInstanceServiceImpl implements UazapiInstanceService {
 
         try {
             post(creds, "/webhook", payload);
-            saveConfig("webhook.last-synced-url", webhookUrl, "Última URL de webhook configurada na Uazapi");
+            saveConfig(LAST_SYNCED_WEBHOOK_KEY, webhookUrl, "Última URL de webhook configurada na Uazapi");
             return true;
         } catch (RestClientException primaryError) {
             log.debug("[UazapiInstanceService] /webhook falhou para [{}], tentando /instance/webhook: {}",
                     creds.instance(), primaryError.getMessage());
             try {
                 post(creds, "/instance/webhook", payload);
-                saveConfig("webhook.last-synced-url", webhookUrl, "Última URL de webhook configurada na Uazapi");
+                saveConfig(LAST_SYNCED_WEBHOOK_KEY, webhookUrl, "Última URL de webhook configurada na Uazapi");
                 return true;
             } catch (RestClientException fallbackError) {
                 log.warn("[UazapiInstanceService] Falha ao sincronizar webhook para [{}]: {}",
@@ -318,6 +321,12 @@ public class UazapiInstanceServiceImpl implements UazapiInstanceService {
     private void saveConfig(String key, String value, String description) {
         SystemConfiguration config = configRepository.findByConfigKey(key)
                 .orElse(SystemConfiguration.builder().configKey(key).build());
+        // O webhook é cadastrado por instância, mas a marca de idempotência guarda só a URL, que
+        // não muda entre instâncias (domínio fixo do Ngrok). Trocar de instância sem limpar a marca
+        // deixava a nova instância conectada e sem webhook, sem receber nenhuma mensagem.
+        if (INSTANCE_CREDENTIAL_KEYS.contains(key) && !value.equals(config.getConfigValue())) {
+            configRepository.findByConfigKey(LAST_SYNCED_WEBHOOK_KEY).ifPresent(configRepository::delete);
+        }
         config.setConfigValue(value);
         config.setDescription(description);
         configRepository.save(config);

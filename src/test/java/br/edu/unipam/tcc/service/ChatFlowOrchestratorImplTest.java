@@ -1,7 +1,9 @@
 package br.edu.unipam.tcc.service;
 
+import br.edu.unipam.tcc.dto.AdaptiveReviewOutcomeDto;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
+import br.edu.unipam.tcc.dto.TopicPerformanceDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.Flashcard;
@@ -12,11 +14,16 @@ import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.entity.enums.TopicMastery;
+import br.edu.unipam.tcc.flow.StudentPerformanceFlowHandler;
+import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.repository.CourseRepository;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentCourseRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
+import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.ChatFlowOrchestratorImpl;
 import br.edu.unipam.tcc.session.ChatSessionState;
@@ -25,22 +32,32 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -61,12 +78,17 @@ class ChatFlowOrchestratorImplTest {
     @Mock private SubjectRepository subjectRepository;
     @Mock private FlashcardRepository flashcardRepository;
     @Mock private RepetitionScheduleRepository repetitionScheduleRepository;
-    @Mock private MmeebbService mmeebbService;
-    @Mock private UazapiClientService uazapiClientService;
+    @Mock private AdaptiveReviewService adaptiveReviewService;
     @Mock private SubjectRagService subjectRagService;
     @Mock private IntentRouterService intentRouterService;
     @Mock private AnswerEvaluationService answerEvaluationService;
     @Mock private StudentOnboardingService studentOnboardingService;
+    @Mock private MmeebbMetrics mmeebbMetrics;
+    @Mock private StudentSettingsFlowHandler studentSettingsFlowHandler;
+    @Mock private StudentPerformanceFlowHandler studentPerformanceFlowHandler;
+    // 02:30 UTC do dia 18 equivale a 23:30 do dia 17 em Brasília: prova que a data vem do fuso de São Paulo.
+    @Spy private Clock clock = Clock.fixed(Instant.parse("2026-09-18T02:30:00Z"), ZoneId.of("America/Sao_Paulo"));
+    @Mock private OutgoingMessagePublisher outgoingMessagePublisher;
 
     @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
 
@@ -98,6 +120,10 @@ class ChatFlowOrchestratorImplTest {
                 .active(true)
                 .build();
         flashcard.setId(100L);
+
+        // Sem estímulo adaptativo, a fila chega ao aluno na mesma ordem em que veio do banco.
+        when(adaptiveReviewService.prioritize(any(), anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
     }
 
     private UazapiWebhookDto message(String text) {
@@ -115,7 +141,7 @@ class ChatFlowOrchestratorImplTest {
 
     private String lastSentMessage() {
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        verify(uazapiClientService, org.mockito.Mockito.atLeastOnce()).sendTextMessage(eq(PHONE), captor.capture());
+        verify(outgoingMessagePublisher, org.mockito.Mockito.atLeastOnce()).publish(eq(PHONE), captor.capture());
         return captor.getValue();
     }
 
@@ -135,7 +161,12 @@ class ChatFlowOrchestratorImplTest {
         verify(chatSessionStore).save(captor.capture());
 
         assertEquals(ChatState.AWAITING_FULL_NAME, captor.getValue().getCurrentState());
-        assertTrue(lastSentMessage().contains("nome completo"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Seja bem-vindo ao Chatbot MMEEBB UNIPAM"));
+        assertTrue(sent.contains("Por favor"));
+        assertTrue(sent.contains("*nome completo*"));
+        assertTrue(sent.contains("Maria Silva Andrade"));
     }
 
     @Test
@@ -215,8 +246,10 @@ class ChatFlowOrchestratorImplTest {
         assertEquals(student.getId(), session.getStudentId());
 
         String sent = lastSentMessage();
-        assertTrue(sent.contains("Cadastro concluído"));
+        assertTrue(sent.contains("Cadastro concluído, Maria"));
         assertTrue(sent.contains("12"));
+        assertTrue(sent.contains("*08:00*"));
+        assertTrue(sent.contains("*configurações*"));
     }
 
     @Test
@@ -248,7 +281,9 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("bom dia"));
 
         verify(studentOnboardingService, never()).register(anyString(), anyString(), anyString(), any(), any());
-        assertTrue(lastSentMessage().contains("Menu Principal"));
+        String menu = lastSentMessage();
+        assertTrue(menu.contains("Menu Principal"));
+        assertTrue(menu.contains("Configurações"));
     }
 
     // =========================================================================
@@ -339,29 +374,125 @@ class ChatFlowOrchestratorImplTest {
         when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
                 .thenReturn(new AnswerEvaluationDto(true, "Boa! É exatamente a conduta indicada.", false));
 
-        RepetitionSchedule schedule = RepetitionSchedule.builder()
-                .student(student).flashcard(flashcard).nIndex(1).intervalDays(2).build();
-        when(repetitionScheduleRepository.findByStudentIdAndFlashcardId(student.getId(), flashcard.getId()))
-                .thenReturn(Optional.of(schedule));
-
         RepetitionSchedule updated = RepetitionSchedule.builder()
                 .student(student).flashcard(flashcard).nIndex(2).intervalDays(4)
                 .status(ScheduleStatus.PENDING).build();
-        when(mmeebbService.processAnswer(eq(schedule), eq(true), any())).thenReturn(updated);
+        when(adaptiveReviewService.processAnswer(eq(student), eq(flashcard), eq(true), any()))
+                .thenReturn(outcome(updated, TopicMastery.SEM_DADOS, 0.0, false, false, 0));
         when(repetitionScheduleRepository.findPendingReviewsByStudent(
                 eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
                 .thenReturn(List.of());
 
         orchestrator.processIncomingMessage(message("choque elétrico sincronizado"));
 
-        verify(mmeebbService).processAnswer(eq(schedule), eq(true), any());
-        verify(repetitionScheduleRepository).save(updated);
+        verify(adaptiveReviewService).processAnswer(eq(student), eq(flashcard), eq(true), any());
 
         String sent = lastSentMessage();
         assertTrue(sent.contains("Resposta correta"));
         assertTrue(sent.contains("4 dia(s)"));
         assertTrue(sent.contains("É exatamente a conduta indicada."));
+        assertFalse(sent.contains("Ajuste personalizado"));
         assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Deve explicar ao aluno quando o teto do tópico frágil segurar o intervalo")
+    void shouldExplainAdaptiveCapToStudent() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
+        when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
+                .thenReturn(new AnswerEvaluationDto(true, null, false));
+
+        RepetitionSchedule updated = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).nIndex(3).intervalDays(8)
+                .status(ScheduleStatus.PENDING).build();
+        when(adaptiveReviewService.processAnswer(eq(student), eq(flashcard), eq(true), any()))
+                .thenReturn(outcome(updated, TopicMastery.FRAGIL, 0.67, true, false, 0));
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("cardioversão"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Ajuste personalizado"));
+        assertTrue(sent.contains("Arritmias"));
+        assertTrue(sent.contains("67% de erro"));
+        assertTrue(sent.contains("8 dia(s)"));
+    }
+
+    @Test
+    @DisplayName("Deve anunciar o reforço dirigido e o lapso amortecido quando houver erro")
+    void shouldAnnounceReinforcementAndSoftenedLapse() {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
+        when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
+                .thenReturn(AnswerEvaluationDto.rejected());
+
+        RepetitionSchedule updated = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).nIndex(4).intervalDays(16)
+                .status(ScheduleStatus.PENDING).build();
+        when(adaptiveReviewService.processAnswer(eq(student), eq(flashcard), eq(false), any()))
+                .thenReturn(outcome(updated, TopicMastery.DOMINADO, 0.08, false, true, 2));
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("não sei"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Intervalo recuado para *16 dia(s)*"));
+        assertFalse(sent.contains("Intervalo reiniciado"));
+        assertTrue(sent.contains("tratei isto como um lapso"));
+        assertTrue(sent.contains("Reforço dirigido"));
+        assertTrue(sent.contains("*2* questão(ões)"));
+    }
+
+    @Test
+    @DisplayName("Deve entregar a fila de revisões já priorizada pela camada adaptativa")
+    void shouldDeliverPrioritizedReviewQueue() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+
+        Flashcard fraco = Flashcard.builder().subject(subject).topic("Insuficiência cardíaca")
+                .question("Qual a classe funcional NYHA III?").answer("Sintomas aos pequenos esforços")
+                .active(true).build();
+        fraco.setId(200L);
+
+        RepetitionSchedule agendamentoArritmia = RepetitionSchedule.builder()
+                .student(student).flashcard(flashcard).status(ScheduleStatus.PENDING).build();
+        RepetitionSchedule agendamentoFraco = RepetitionSchedule.builder()
+                .student(student).flashcard(fraco).status(ScheduleStatus.PENDING).build();
+
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of(agendamentoArritmia, agendamentoFraco));
+        when(adaptiveReviewService.prioritize(eq(student.getId()), anyList()))
+                .thenReturn(List.of(agendamentoFraco, agendamentoArritmia));
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        verify(adaptiveReviewService).prioritize(eq(student.getId()), anyList());
+        assertEquals(fraco.getId(), session.getCurrentFlashcardId());
+        assertTrue(lastSentMessage().contains("Insuficiência cardíaca"));
+    }
+
+    private AdaptiveReviewOutcomeDto outcome(RepetitionSchedule schedule, TopicMastery mastery, double errorRate,
+                                             boolean intervalCapped, boolean lapseSoftened, int reinforcedCards) {
+        TopicPerformanceDto performance = new TopicPerformanceDto(
+                subject.getId(), subject.getName(), schedule.getFlashcard().getTopic(),
+                10L, Math.round(errorRate * 10), errorRate, mastery);
+        return new AdaptiveReviewOutcomeDto(schedule, performance, intervalCapped, lapseSoftened, reinforcedCards);
     }
 
     @Test
@@ -376,15 +507,11 @@ class ChatFlowOrchestratorImplTest {
         when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
                 .thenReturn(AnswerEvaluationDto.rejected());
 
-        RepetitionSchedule schedule = RepetitionSchedule.builder()
-                .student(student).flashcard(flashcard).nIndex(3).intervalDays(8).build();
-        when(repetitionScheduleRepository.findByStudentIdAndFlashcardId(student.getId(), flashcard.getId()))
-                .thenReturn(Optional.of(schedule));
-
         RepetitionSchedule updated = RepetitionSchedule.builder()
                 .student(student).flashcard(flashcard).nIndex(0).intervalDays(1)
                 .status(ScheduleStatus.PENDING).build();
-        when(mmeebbService.processAnswer(eq(schedule), eq(false), any())).thenReturn(updated);
+        when(adaptiveReviewService.processAnswer(eq(student), eq(flashcard), eq(false), any()))
+                .thenReturn(outcome(updated, TopicMastery.SEM_DADOS, 0.0, false, false, 0));
         when(repetitionScheduleRepository.findPendingReviewsByStudent(
                 eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
                 .thenReturn(List.of());
@@ -414,8 +541,7 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("não entendi, pode explicar essa questão?"));
 
         verify(subjectRagService).answerDoubt(anyString(), eq(subject.getId()));
-        verify(repetitionScheduleRepository, never()).save(any());
-        verify(mmeebbService, never()).processAnswer(any(), anyBoolean(), any());
+        verify(adaptiveReviewService, never()).processAnswer(any(), any(), anyBoolean(), any());
 
         String sent = lastSentMessage();
         assertTrue(sent.contains("cardioversão elétrica sincronizada é indicada"));
@@ -497,7 +623,164 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(null);
         orchestrator.processIncomingMessage(new UazapiWebhookDto(null, JID, true, "oi", null, null, "msg"));
 
-        verify(uazapiClientService, never()).sendTextMessage(anyString(), anyString());
+        verify(outgoingMessagePublisher, never()).publish(anyString(), anyString());
         verify(chatSessionStore, never()).save(any());
+    }
+
+    // =========================================================================
+    // Configurações
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve abrir Configurações pela opção 3 do menu sem classificar intenção")
+    void shouldOpenSettingsFromMenuOptionThree() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("3"));
+
+        verify(studentSettingsFlowHandler).open(session);
+        verify(intentRouterService, never()).classify(anyString());
+    }
+
+    @ParameterizedTest(name = "palavra-chave \"{0}\"")
+    @DisplayName("Deve abrir Configurações por palavra-chave global mesmo durante uma revisão")
+    @ValueSource(strings = {"configurações", "Configuracoes", "config", "AJUSTES", "preferências", "/config"})
+    void shouldOpenSettingsFromGlobalKeyword(String keyword) {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message(keyword));
+
+        verify(studentSettingsFlowHandler).open(session);
+        assertNull(session.getCurrentFlashcardId());
+        verify(answerEvaluationService, never()).evaluate(anyString(), any());
+    }
+
+    // =========================================================================
+    // Relatório de desempenho
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deve abrir o relatório de desempenho pela opção 4 do menu")
+    void shouldOpenPerformanceReportFromMenuOption() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+
+        orchestrator.processIncomingMessage(message("4"));
+
+        verify(studentPerformanceFlowHandler).send(session, student);
+        verify(intentRouterService, never()).classify(anyString());
+    }
+
+    @ParameterizedTest(name = "\"{0}\"")
+    @DisplayName("Deve abrir o desempenho por palavra-chave em qualquer estado após o cadastro")
+    @ValueSource(strings = {"desempenho", "meu desempenho", "progresso", "estatísticas", "como estou"})
+    void shouldOpenPerformanceReportFromGlobalKeyword(String keyword) {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(flashcard.getId());
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+
+        orchestrator.processIncomingMessage(message(keyword));
+
+        verify(studentPerformanceFlowHandler).send(session, student);
+        verify(answerEvaluationService, never()).evaluate(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("Deve abrir o desempenho quando a intenção classificada for SHOW_PERFORMANCE")
+    void shouldOpenPerformanceReportFromIntent() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(intentRouterService.classify("será que estou melhorando?"))
+                .thenReturn(IntentResultDto.of(ChatIntent.SHOW_PERFORMANCE));
+
+        orchestrator.processIncomingMessage(message("será que estou melhorando?"));
+
+        verify(studentPerformanceFlowHandler).send(session, student);
+    }
+
+    @Test
+    @DisplayName("O menu principal deve anunciar a opção de desempenho")
+    void mainMenuShouldAnnouncePerformanceOption() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("menu"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("*3* - ⚙️ Configurações"));
+        assertTrue(sent.contains("*4* - 📊 Meu desempenho"));
+    }
+
+    @ParameterizedTest(name = "estado {0}")
+    @DisplayName("Deve delegar os estados de Configurações ao handler")
+    @EnumSource(value = ChatState.class, mode = EnumSource.Mode.MATCH_ALL, names = "SETTINGS_.*")
+    void shouldDelegateSettingsStatesToHandler(ChatState state) {
+        ChatSessionState session = registeredSession(state);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("12:15"));
+
+        verify(studentSettingsFlowHandler).handle(session, "12:15");
+    }
+
+    @Test
+    @DisplayName("'menu' durante uma edição deve cancelar sem passar pelo handler")
+    void shouldCancelSettingsEditWithMenuCommand() {
+        ChatSessionState session = registeredSession(ChatState.SETTINGS_AWAITING_TIME);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("menu"));
+
+        verify(studentSettingsFlowHandler, never()).handle(any(), anyString());
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("Menu Principal"));
+    }
+
+    @Test
+    @DisplayName("Deve abrir Configurações quando a intenção classificada for OPEN_SETTINGS")
+    void shouldOpenSettingsFromIntent() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(intentRouterService.classify("quero mudar o horário do lembrete"))
+                .thenReturn(IntentResultDto.of(ChatIntent.OPEN_SETTINGS));
+
+        orchestrator.processIncomingMessage(message("quero mudar o horário do lembrete"));
+
+        verify(studentSettingsFlowHandler).open(session);
+    }
+
+    @Test
+    @DisplayName("Não deve abrir Configurações antes de concluir o cadastro")
+    void shouldNotOpenSettingsBeforeRegistration() {
+        ChatSessionState session = ChatSessionState.builder()
+                .phoneNumber(PHONE)
+                .currentState(ChatState.AWAITING_FULL_NAME)
+                .build();
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("config"));
+
+        verify(studentSettingsFlowHandler, never()).open(any());
+        assertEquals(ChatState.AWAITING_FULL_NAME, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Deve buscar pendências pela data de São Paulo, não pelo fuso da JVM")
+    void shouldQueryPendingReviewsUsingSaoPauloDate() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(any(), any(), any())).thenReturn(List.of());
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        verify(repetitionScheduleRepository).findPendingReviewsByStudent(
+                student.getId(), LocalDate.of(2026, 9, 17), ScheduleStatus.PENDING);
     }
 }

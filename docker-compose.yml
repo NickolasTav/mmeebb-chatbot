@@ -50,6 +50,57 @@ services:
       timeout: 5s
       retries: 5
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mmeebb-prometheus
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: mmeebb-loki
+    restart: unless-stopped
+    volumes:
+      - ./docker/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: mmeebb-promtail
+    restart: unless-stopped
+    volumes:
+      - ./docker/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./logs:/var/log/mmeebb:ro
+    command: ["-config.file=/etc/promtail/config.yml"]
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mmeebb-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+
 volumes:
   postgres_data:
     name: mmeebb_postgres_data
@@ -57,3 +108,9 @@ volumes:
     name: mmeebb_rabbitmq_data
   redis_data:
     name: mmeebb_redis_data
+  prometheus_data:
+    name: mmeebb_prometheus_data
+  loki_data:
+    name: mmeebb_loki_data
+  grafana_data:
+    name: mmeebb_grafana_data

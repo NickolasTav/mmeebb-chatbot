@@ -53,6 +53,7 @@ spring:
     password: ${SPRING_RABBITMQ_PASSWORD:guest}
     listener:
       simple:
+        prefetch: 1
         retry:
           enabled: true
           initial-interval: 2000ms
@@ -70,6 +71,12 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+  tracing:
+    sampling:
+      probability: 1.0
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 logging:
   level:
@@ -77,6 +84,11 @@ logging:
     br.edu.unipam.tcc: INFO
     org.springframework.web: WARN
     org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} %clr(%5p) [%X{traceId:-},%X{studentPhone:-},%X{action:-}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} %5p [%X{traceId:-},%X{studentPhone:-},%X{action:-}] %logger{36} - %msg%n"
+  file:
+    name: logs/application.log
 
 uazapi:
   base-url: ${UAZAPI_BASE_URL:https://free.uazapi.com}
@@ -84,6 +96,8 @@ uazapi:
   instance: ${UAZAPI_INSTANCE:}
   admin-token: ${UAZAPI_ADMIN_TOKEN:}
   typing-delay-ms: ${UAZAPI_TYPING_DELAY_MS:2000}
+  inbound:
+    concurrency: ${UAZAPI_INBOUND_CONCURRENCY:3-6}
 
 ngrok:
   client-api-url: ${NGROK_CLIENT_API_URL:http://127.0.0.1:4040}
@@ -101,7 +115,22 @@ mmeebb:
   session:
     ttl-minutes: ${MMEEBB_SESSION_TTL_MINUTES:60}
   scheduler:
-    cron: ${MMEEBB_SCHEDULER_CRON:0 0 8 * * *}
+    cron: ${MMEEBB_SCHEDULER_CRON:0 */5 * * * *}
+  adaptive:
+    # Desligar devolve o sistema ao MMEEBB classico (sem teto, reforco ou repriorizacao).
+    enabled: ${MMEEBB_ADAPTIVE_ENABLED:true}
+    # Janela de analise do desempenho, em dias: um mes ruim nao marca o topico para sempre.
+    window-days: ${MMEEBB_ADAPTIVE_WINDOW_DAYS:90}
+    # Tentativas minimas no topico antes de personalizar qualquer coisa.
+    min-attempts: ${MMEEBB_ADAPTIVE_MIN_ATTEMPTS:3}
+    # Taxa de erro que classifica o topico como fragil (teto 2^3 = 8 dias).
+    fragile-error-rate: ${MMEEBB_ADAPTIVE_FRAGILE_ERROR_RATE:0.50}
+    # Taxa de erro que classifica o topico como em consolidacao (teto 2^6 = 64 dias).
+    consolidating-error-rate: ${MMEEBB_ADAPTIVE_CONSOLIDATING_ERROR_RATE:0.20}
+    # Cartoes do mesmo topico antecipados como reforco apos erro em topico fragil.
+    reinforcement-max-cards: ${MMEEBB_ADAPTIVE_REINFORCEMENT_MAX_CARDS:2}
+    # Tentativas minimas antes de exibir percentuais no relatorio de desempenho.
+    report-min-attempts: ${MMEEBB_ADAPTIVE_REPORT_MIN_ATTEMPTS:5}
 
 
 

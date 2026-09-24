@@ -5,8 +5,10 @@ public enum ChatIntent {
     START_REVIEW,
     /** Fez uma pergunta de conteúdo que deve ser respondida pelo RAG. */
     ASK_DOUBT,
-    /** Quer trocar o curso ou a disciplina em foco. */
-    CHANGE_SUBJECT,
+    /** Quer ver ou alterar suas configurações: apelido, lembrete, curso ou período. */
+    OPEN_SETTINGS,
+    /** Quer saber como esta indo: taxa de acerto, pontos fracos e progresso. */
+    SHOW_PERFORMANCE,
     /** Quer ver o menu de opções. */
     SHOW_MENU,
     /** Quer encerrar a sessão. */

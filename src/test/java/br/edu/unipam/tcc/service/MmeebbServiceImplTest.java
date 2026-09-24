@@ -4,6 +4,8 @@ import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.entity.enums.TopicMastery;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.impl.MmeebbServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -25,7 +27,7 @@ class MmeebbServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        mmeebbService = new MmeebbServiceImpl();
+        mmeebbService = new MmeebbServiceImpl(org.mockito.Mockito.mock(MmeebbMetrics.class));
         student = Student.builder()
                 .id(UUID.randomUUID())
                 .phoneNumber("5534999998888")
@@ -225,5 +227,127 @@ class MmeebbServiceImplTest {
     void deveLancarExcecaoQuandoParametrosInvalidosNoProcessAnswer() {
         assertThrows(IllegalArgumentException.class, () -> mmeebbService.processAnswer(null, true, LocalDateTime.now()));
         assertThrows(IllegalArgumentException.class, () -> mmeebbService.processAnswer(new RepetitionSchedule(), true, null));
+    }
+
+    // =========================================================================
+    // MMEEBB adaptativo: teto de N por domínio do tópico e lapso graduado
+    // =========================================================================
+
+    private static final LocalDateTime RESPONDIDO_EM = LocalDateTime.of(2026, 9, 17, 10, 0);
+
+    private RepetitionSchedule scheduleComN(int nIndex) {
+        return RepetitionSchedule.builder()
+                .student(student)
+                .flashcard(flashcard)
+                .nIndex(nIndex)
+                .intervalDays(1 << nIndex)
+                .repetitionCount(nIndex)
+                .consecutiveCorrect(nIndex)
+                .nextReviewDate(RESPONDIDO_EM.toLocalDate())
+                .status(ScheduleStatus.PENDING)
+                .build();
+    }
+
+    @ParameterizedTest(name = "N = {0}")
+    @CsvSource({"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"})
+    @DisplayName("Sem histórico do tópico, o adaptativo deve ser idêntico ao MMEEBB clássico")
+    void semHistoricoDeveSerIdenticoAoMmeebbClassico(int nIndex) {
+        for (boolean acertou : new boolean[]{true, false}) {
+            RepetitionSchedule classico = mmeebbService.processAnswer(scheduleComN(nIndex), acertou, RESPONDIDO_EM);
+            RepetitionSchedule adaptativo = mmeebbService.processAnswer(
+                    scheduleComN(nIndex), acertou, RESPONDIDO_EM, TopicMastery.SEM_DADOS);
+
+            assertEquals(classico.getNIndex(), adaptativo.getNIndex(),
+                    "N divergente para N=" + nIndex + ", acerto=" + acertou);
+            assertEquals(classico.getIntervalDays(), adaptativo.getIntervalDays());
+            assertEquals(classico.getNextReviewDate(), adaptativo.getNextReviewDate());
+            assertEquals(classico.getConsecutiveCorrect(), adaptativo.getConsecutiveCorrect());
+        }
+    }
+
+    @Test
+    @DisplayName("Tópico frágil deve segurar o intervalo em 8 dias mesmo quando o aluno acerta")
+    void topicoFragilDeveSegurarOIntervaloEmOitoDias() {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(5), true, RESPONDIDO_EM, TopicMastery.FRAGIL);
+
+        assertEquals(3, resultado.getNIndex());
+        assertEquals(8, resultado.getIntervalDays());
+        assertEquals(LocalDate.of(2026, 9, 25), resultado.getNextReviewDate());
+        assertEquals(6, resultado.getConsecutiveCorrect());
+    }
+
+    @Test
+    @DisplayName("Tópico em consolidação deve segurar o intervalo em 64 dias")
+    void topicoEmConsolidacaoDeveSegurarOIntervaloEmSessentaEQuatroDias() {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(9), true, RESPONDIDO_EM, TopicMastery.EM_CONSOLIDACAO);
+
+        assertEquals(6, resultado.getNIndex());
+        assertEquals(64, resultado.getIntervalDays());
+    }
+
+    @Test
+    @DisplayName("Abaixo do teto, o tópico frágil deve avançar normalmente (N+1)")
+    void abaixoDoTetoOTopicoFragilDeveAvancarNormalmente() {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(1), true, RESPONDIDO_EM, TopicMastery.FRAGIL);
+
+        assertEquals(2, resultado.getNIndex());
+        assertEquals(4, resultado.getIntervalDays());
+    }
+
+    @Test
+    @DisplayName("Erro em tópico dominado deve recuar duas casas em vez de zerar")
+    void erroEmTopicoDominadoDeveRecuarDuasCasas() {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(6), false, RESPONDIDO_EM, TopicMastery.DOMINADO);
+
+        assertEquals(4, resultado.getNIndex());
+        assertEquals(16, resultado.getIntervalDays());
+        assertEquals(LocalDate.of(2026, 10, 3), resultado.getNextReviewDate());
+        assertEquals(0, resultado.getConsecutiveCorrect());
+        assertEquals(7, resultado.getRepetitionCount());
+    }
+
+    @Test
+    @DisplayName("O recuo do lapso graduado não pode ultrapassar N=0")
+    void oRecuoDoLapsoGraduadoNaoPodeUltrapassarZero() {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(1), false, RESPONDIDO_EM, TopicMastery.DOMINADO);
+
+        assertEquals(0, resultado.getNIndex());
+        assertEquals(1, resultado.getIntervalDays());
+    }
+
+    @ParameterizedTest(name = "domínio = {0}")
+    @CsvSource({"FRAGIL", "EM_CONSOLIDACAO", "SEM_DADOS"})
+    @DisplayName("Fora de tópico dominado, o erro deve continuar zerando o ciclo")
+    void foraDeTopicoDominadoOErroDeveZerarOCiclo(TopicMastery mastery) {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(5), false, RESPONDIDO_EM, mastery);
+
+        assertEquals(0, resultado.getNIndex());
+        assertEquals(1, resultado.getIntervalDays());
+        assertEquals(0, resultado.getConsecutiveCorrect());
+    }
+
+    @Test
+    @DisplayName("Tópico dominado deve seguir o MMEEBB clássico no acerto, até o teto de 13")
+    void topicoDominadoDeveSeguirOClassicoNoAcerto() {
+        assertEquals(6, mmeebbService.processAnswer(
+                scheduleComN(5), true, RESPONDIDO_EM, TopicMastery.DOMINADO).getNIndex());
+        assertEquals(13, mmeebbService.processAnswer(
+                scheduleComN(13), true, RESPONDIDO_EM, TopicMastery.DOMINADO).getNIndex());
+    }
+
+    @Test
+    @DisplayName("Domínio nulo deve ser tratado como SEM_DADOS para nunca derrubar uma revisão")
+    void dominioNuloDeveSerTratadoComoSemDados() {
+        RepetitionSchedule resultado = mmeebbService.processAnswer(
+                scheduleComN(5), true, RESPONDIDO_EM, null);
+
+        assertEquals(6, resultado.getNIndex());
+        assertEquals(64, resultado.getIntervalDays());
     }
 }

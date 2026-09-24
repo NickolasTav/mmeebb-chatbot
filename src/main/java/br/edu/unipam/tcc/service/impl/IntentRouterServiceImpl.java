@@ -2,6 +2,7 @@ package br.edu.unipam.tcc.service.impl;
 
 import br.edu.unipam.tcc.dto.IntentResultDto;
 import br.edu.unipam.tcc.entity.enums.ChatIntent;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.IntentRouterService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,7 +30,9 @@ public class IntentRouterServiceImpl implements IntentRouterService {
 
             - START_REVIEW: quer estudar, revisar, praticar, responder questões ou flashcards pendentes.
             - ASK_DOUBT: fez uma pergunta de conteúdo acadêmico/clínico, ou pediu explicação sobre um tema.
-            - CHANGE_SUBJECT: quer trocar, escolher ou mudar o curso ou a disciplina em foco.
+            - OPEN_SETTINGS: quer ver ou mudar configurações pessoais: como é chamado, horário do lembrete, pausar ou ativar lembretes, trocar de curso ou de período.
+            - SHOW_PERFORMANCE: quer saber como esta indo: desempenho, progresso, taxa de acerto,
+              estatisticas, em quais conteudos erra mais ou se esta melhorando.
             - SHOW_MENU: cumprimentou, pediu ajuda, pediu o menu ou perguntou como o sistema funciona.
             - EXIT: quer encerrar, sair ou se despedir.
 
@@ -41,15 +44,18 @@ public class IntentRouterServiceImpl implements IntentRouterService {
 
     private final ChatLanguageModel chatLanguageModel;
     private final ObjectMapper objectMapper;
+    private final MmeebbMetrics mmeebbMetrics;
 
-    public IntentRouterServiceImpl(ChatLanguageModel chatLanguageModel, ObjectMapper objectMapper) {
+    public IntentRouterServiceImpl(ChatLanguageModel chatLanguageModel, ObjectMapper objectMapper, MmeebbMetrics mmeebbMetrics) {
         this.chatLanguageModel = chatLanguageModel;
         this.objectMapper = objectMapper;
+        this.mmeebbMetrics = mmeebbMetrics;
     }
 
     @Override
     public IntentResultDto classify(String message) {
         if (message == null || message.isBlank()) {
+            mmeebbMetrics.recordAiInteraction("intent_router", "fast_path");
             return IntentResultDto.of(ChatIntent.SHOW_MENU);
         }
 
@@ -61,12 +67,14 @@ public class IntentRouterServiceImpl implements IntentRouterService {
 
             String raw = response != null && response.content() != null ? response.content().text() : "";
             IntentResultDto parsed = parse(raw);
+            mmeebbMetrics.recordAiInteraction("intent_router", "gemini");
 
             log.info("[IntentRouter] \"{}\" -> {} (disciplina: {})",
                     message.trim(), parsed.intent(), parsed.subjectHint());
             return parsed;
 
         } catch (Exception e) {
+            mmeebbMetrics.recordAiInteraction("intent_router", "fallback");
             log.error("[IntentRouter] Falha ao classificar intenção, assumindo dúvida (RAG): {}", e.getMessage());
             return IntentResultDto.of(ChatIntent.ASK_DOUBT);
         }

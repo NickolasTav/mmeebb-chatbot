@@ -4,6 +4,8 @@ import br.edu.unipam.tcc.entity.enums.ChatState;
 import br.edu.unipam.tcc.entity.enums.DifficultyLevel;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
+import br.edu.unipam.tcc.entity.enums.TopicMastery;
+import br.edu.unipam.tcc.service.MmeebbService;
 import br.edu.unipam.tcc.session.ChatSessionState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -98,6 +100,81 @@ class EntityInstantiationTest {
         assertEquals(0, schedule.getConsecutiveCorrect());
         assertEquals(ScheduleStatus.PENDING, schedule.getStatus());
         assertEquals(LocalDate.now(), schedule.getNextReviewDate());
+    }
+
+    @Test
+    @DisplayName("Deve usar o apelido como nome de exibição quando informado")
+    void deveUsarApelidoComoNomeDeExibicao() {
+        Student student = Student.builder().fullName("Maria Silva Andrade").preferredName("Mari").build();
+
+        assertEquals("Mari", student.displayName());
+    }
+
+    @Test
+    @DisplayName("Deve usar o primeiro nome quando não houver apelido")
+    void deveUsarPrimeiroNomeQuandoNaoHouverApelido() {
+        Student student = Student.builder().fullName("  Maria   Silva Andrade ").preferredName("  ").build();
+
+        assertEquals("Maria", student.displayName());
+    }
+
+    @Test
+    @DisplayName("Deve usar 'Estudante' quando não houver nome nem apelido")
+    void deveUsarNomeGenericoQuandoNaoHouverNome() {
+        assertEquals("Estudante", Student.builder().build().displayName());
+    }
+
+    @Test
+    @DisplayName("Deve criar estudante com lembretes ativos às 08:00 e sem avaliação registrada")
+    void deveCriarStudentComPreferenciasPadraoDeLembrete() {
+        Student student = Student.builder().fullName("Maria Silva").build();
+
+        assertEquals(LocalTime.of(8, 0), student.getPreferredStudyTime());
+        assertEquals(Boolean.TRUE, student.getReviewNotificationsEnabled());
+        assertNull(student.getLastReviewNotificationOn());
+    }
+
+    @Test
+    @DisplayName("Deve instanciar ReviewAttempt registrando o N antes e depois da decisão")
+    void deveInstanciarReviewAttemptCorretamente() {
+        Student student = Student.builder().id(UUID.randomUUID()).fullName("Aluno").build();
+        Flashcard flashcard = Flashcard.builder().id(100L).topic("Antibioticoterapia")
+                .question("Q").answer("A").build();
+
+        ReviewAttempt attempt = ReviewAttempt.builder()
+                .student(student)
+                .flashcard(flashcard)
+                .correct(false)
+                .nIndexBefore(6)
+                .nIndexAfter(4)
+                .intervalDaysAfter(16)
+                .topicMastery(TopicMastery.DOMINADO)
+                .answeredAt(LocalDateTime.of(2026, 9, 17, 10, 0))
+                .build();
+
+        assertEquals(6, attempt.getNIndexBefore());
+        assertEquals(4, attempt.getNIndexAfter());
+        assertEquals(16, attempt.getIntervalDaysAfter());
+        assertEquals(TopicMastery.DOMINADO, attempt.getTopicMastery());
+        assertFalse(attempt.getCorrect());
+    }
+
+    @Test
+    @DisplayName("Deve nascer como SEM_DADOS quando o domínio do tópico não for informado")
+    void deveUsarDominioSemDadosPorPadrao() {
+        assertEquals(TopicMastery.SEM_DADOS, ReviewAttempt.builder().build().getTopicMastery());
+    }
+
+    @Test
+    @DisplayName("Teto clássico do enum deve espelhar o MAX_N_INDEX do motor MMEEBB")
+    void tetoClassicoDeveEspelharOMotorMmeebb() {
+        assertEquals(MmeebbService.MAX_N_INDEX, TopicMastery.CLASSIC_MAX_N_INDEX);
+        assertEquals(MmeebbService.MAX_N_INDEX, TopicMastery.SEM_DADOS.maxNIndex());
+        assertEquals(MmeebbService.MAX_N_INDEX, TopicMastery.DOMINADO.maxNIndex());
+        assertFalse(TopicMastery.DOMINADO.limitsInterval());
+        assertTrue(TopicMastery.FRAGIL.limitsInterval());
+        assertEquals(3, TopicMastery.FRAGIL.maxNIndex());
+        assertEquals(6, TopicMastery.EM_CONSOLIDACAO.maxNIndex());
     }
 
     @Test

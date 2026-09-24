@@ -2,6 +2,8 @@ package br.edu.unipam.tcc.consumer;
 
 import br.edu.unipam.tcc.config.RabbitMQConfig;
 import br.edu.unipam.tcc.dto.OutgoingMessageDto;
+import br.edu.unipam.tcc.observability.CorrelationMdcHelper;
+import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.UazapiClientService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -23,17 +25,20 @@ import java.util.concurrent.ThreadLocalRandom;
 public class WhatsappOutgoingConsumer {
 
     private final UazapiClientService uazapiClientService;
+    private final MmeebbMetrics mmeebbMetrics;
     private final long minJitterMs;
     private final long maxJitterMs;
     private final long composingDelayMs;
 
     public WhatsappOutgoingConsumer(
             UazapiClientService uazapiClientService,
+            MmeebbMetrics mmeebbMetrics,
             @Value("${uazapi.anti-ban.min-jitter-ms:3000}") long minJitterMs,
             @Value("${uazapi.anti-ban.max-jitter-ms:6000}") long maxJitterMs,
             @Value("${uazapi.anti-ban.composing-delay-ms:1500}") long composingDelayMs
     ) {
         this.uazapiClientService = uazapiClientService;
+        this.mmeebbMetrics = mmeebbMetrics;
         this.minJitterMs = minJitterMs;
         this.maxJitterMs = maxJitterMs;
         this.composingDelayMs = composingDelayMs;
@@ -54,41 +59,44 @@ public class WhatsappOutgoingConsumer {
         String phone = outgoingDto.phoneNumber().trim();
         String text = outgoingDto.messageText();
 
-        try {
-            // 1. Aplica Jitter pseudoaleatório entre mensagens
-            long jitter = calculateJitterMs();
-            if (jitter > 0) {
-                log.debug("[WhatsappOutgoingConsumer] Aplicando jitter anti-ban de {}ms para [{}]", jitter, phone);
-                Thread.sleep(jitter);
-            }
-
-            // 2. Simula presença 'composing' (digitando...)
-            uazapiClientService.sendPresence(phone, "composing");
-
-            // 3. Pausa de digitação humana
-            if (composingDelayMs > 0) {
-                Thread.sleep(composingDelayMs);
-            }
-
-            // 4. Dispara a mensagem de texto via Uazapi
-            uazapiClientService.sendTextMessage(phone, text);
-            log.info("[WhatsappOutgoingConsumer] Mensagem despachada com sucesso para [{}]", phone);
-
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("[WhatsappOutgoingConsumer] Thread interrompida durante delay anti-ban para [{}]: {}",
-                    phone, e.getMessage());
-        } catch (Exception e) {
-            log.error("[WhatsappOutgoingConsumer] Falha no processamento de envio para [{}]: {}",
-                    phone, e.getMessage(), e);
-        } finally {
-            // 5. Sempre reseta a presença para 'paused'
+        CorrelationMdcHelper.runWithContext(phone, "OUTBOUND", () -> {
             try {
-                uazapiClientService.sendPresence(phone, "paused");
+                // 1. Aplica Jitter pseudoaleatório entre mensagens
+                long jitter = calculateJitterMs();
+                if (jitter > 0) {
+                    log.debug("[WhatsappOutgoingConsumer] Aplicando jitter anti-ban de {}ms para [{}]", jitter, phone);
+                    Thread.sleep(jitter);
+                }
+
+                // 2. Simula presença 'composing' (digitando...)
+                uazapiClientService.sendPresence(phone, "composing");
+
+                // 3. Pausa de digitação humana
+                if (composingDelayMs > 0) {
+                    Thread.sleep(composingDelayMs);
+                }
+
+                // 4. Dispara a mensagem de texto via Uazapi
+                uazapiClientService.sendTextMessage(phone, text);
+                mmeebbMetrics.recordUazapiMessage("OUTBOUND");
+                log.info("[WhatsappOutgoingConsumer] Mensagem despachada com sucesso para [{}]", phone);
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("[WhatsappOutgoingConsumer] Thread interrompida durante delay anti-ban para [{}]: {}",
+                        phone, e.getMessage());
             } catch (Exception e) {
-                log.warn("[WhatsappOutgoingConsumer] Falha ao resetar presença para [{}]: {}", phone, e.getMessage());
+                log.error("[WhatsappOutgoingConsumer] Falha no processamento de envio para [{}]: {}",
+                        phone, e.getMessage(), e);
+            } finally {
+                // 5. Sempre reseta a presença para 'paused'
+                try {
+                    uazapiClientService.sendPresence(phone, "paused");
+                } catch (Exception e) {
+                    log.warn("[WhatsappOutgoingConsumer] Falha ao resetar presença para [{}]: {}", phone, e.getMessage());
+                }
             }
-        }
+        });
     }
 
     private long calculateJitterMs() {

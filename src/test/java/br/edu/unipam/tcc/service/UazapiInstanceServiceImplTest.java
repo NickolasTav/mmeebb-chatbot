@@ -22,6 +22,7 @@ import org.springframework.web.client.RestClient;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -193,6 +194,34 @@ class UazapiInstanceServiceImplTest {
         UazapiProvisionResponseDto result = assertDoesNotThrow(serviceWithAdminToken::provisionInstance);
 
         assertFalse(result.success());
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("provisionInstance deve invalidar o webhook sincronizado, que pertencia à instância anterior")
+    void provisionInstanceDeveInvalidarWebhookDaInstanciaAnterior() {
+        UazapiInstanceService serviceWithAdminToken = new UazapiInstanceServiceImpl(
+                restClientBuilder, configRepository, BASE_URL, "", "", "admin-token-abc");
+
+        java.util.Map<String, SystemConfiguration> store = new java.util.HashMap<>();
+        store.put("uazapi.instance", SystemConfiguration.builder()
+                .configKey("uazapi.instance").configValue("mmeebb-antiga").build());
+        SystemConfiguration syncedWebhook = SystemConfiguration.builder()
+                .configKey("webhook.last-synced-url").configValue("https://fixo.ngrok-free.dev/webhook/uazapi").build();
+        store.put("webhook.last-synced-url", syncedWebhook);
+        when(configRepository.findByConfigKey(any())).thenAnswer(inv ->
+                java.util.Optional.ofNullable(store.get((String) inv.getArgument(0))));
+        when(configRepository.save(any(SystemConfiguration.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        mockServer.expect(requestTo(BASE_URL + "/instance/init"))
+                .andRespond(withSuccess("""
+                        {"token": "novo-token-gerado"}
+                        """, MediaType.APPLICATION_JSON));
+
+        UazapiProvisionResponseDto result = serviceWithAdminToken.provisionInstance();
+
+        assertTrue(result.success());
+        verify(configRepository, atLeastOnce()).delete(syncedWebhook);
         mockServer.verify();
     }
 }

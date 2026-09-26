@@ -75,7 +75,7 @@ public class IntentRouterServiceImpl implements IntentRouterService {
 
         } catch (Exception e) {
             mmeebbMetrics.recordAiInteraction("intent_router", "fallback");
-            log.error("[IntentRouter] Falha ao classificar intenção, assumindo dúvida (RAG): {}", e.getMessage());
+            log.error("[IntentRouter] Falha ao classificar intenção, assumindo dúvida (tutor): {}", e.getMessage());
             return IntentResultDto.of(ChatIntent.ASK_DOUBT);
         }
     }

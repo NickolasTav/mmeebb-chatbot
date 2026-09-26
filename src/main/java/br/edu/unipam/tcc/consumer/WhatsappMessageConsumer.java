@@ -20,7 +20,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Listens to incoming webhook queue, simulates typing presence with human delay,
  * and delegates execution to the conversational flow orchestrator.
  * Runs with multiple concurrent consumers (see {@code uazapi.inbound.concurrency}) so a slow
- * open-ended question (Gemini/RAG) for one student does not block the others; a per-phone lock
+ * open-ended question (Gemini tutor) for one student does not block the others; a per-phone lock
  * still serializes messages from the same student to protect the Redis-backed session state.
  */
 @Slf4j

@@ -3,6 +3,7 @@ package br.edu.unipam.tcc.service;
 import br.edu.unipam.tcc.dto.AdaptiveReviewOutcomeDto;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
+import br.edu.unipam.tcc.dto.TutorContextDto;
 import br.edu.unipam.tcc.dto.TopicPerformanceDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
 import br.edu.unipam.tcc.entity.Course;
@@ -79,7 +80,7 @@ class ChatFlowOrchestratorImplTest {
     @Mock private FlashcardRepository flashcardRepository;
     @Mock private RepetitionScheduleRepository repetitionScheduleRepository;
     @Mock private AdaptiveReviewService adaptiveReviewService;
-    @Mock private SubjectRagService subjectRagService;
+    @Mock private AiTutorService aiTutorService;
     @Mock private IntentRouterService intentRouterService;
     @Mock private AnswerEvaluationService answerEvaluationService;
     @Mock private StudentOnboardingService studentOnboardingService;
@@ -312,8 +313,8 @@ class ChatFlowOrchestratorImplTest {
     }
 
     @Test
-    @DisplayName("Deve responder dúvida em texto livre pelo RAG e restringir a busca à disciplina citada")
-    void shouldAnswerFreeTextDoubtScopedToMentionedSubject() {
+    @DisplayName("Deve responder dúvida em texto livre pelo tutor com a disciplina citada no contexto")
+    void shouldAnswerFreeTextDoubtWithMentionedSubjectInContext() {
         ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
         when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
         when(intentRouterService.classify(anyString()))
@@ -321,29 +322,76 @@ class ChatFlowOrchestratorImplTest {
         when(subjectRepository.findByCourseIdAndActiveTrueAndNameContainingIgnoreCase(course.getId(), "cardiologia"))
                 .thenReturn(List.of(subject));
         when(subjectRepository.findById(subject.getId())).thenReturn(Optional.of(subject));
-        when(subjectRagService.answerDoubt(anyString(), eq(subject.getId())))
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString()))
                 .thenReturn("A cardioversão é indicada na instabilidade.");
 
         orchestrator.processIncomingMessage(message("tenho uma dúvida de cardiologia sobre fibrilação atrial"));
 
-        verify(subjectRagService).answerDoubt(
-                "tenho uma dúvida de cardiologia sobre fibrilação atrial", subject.getId());
-        assertEquals(ChatState.RAG_DOUBT_MODE, session.getCurrentState());
+        ArgumentCaptor<TutorContextDto> context = ArgumentCaptor.forClass(TutorContextDto.class);
+        verify(aiTutorService).answer(context.capture(),
+                eq("tenho uma dúvida de cardiologia sobre fibrilação atrial"));
+        assertEquals("Cardiologia", context.getValue().subjectName());
+        assertNull(context.getValue().reviewQuestion());
+        assertEquals(ChatState.DOUBT_MODE, session.getCurrentState());
         assertEquals(subject.getId(), session.getSelectedSubjectId());
         assertTrue(lastSentMessage().contains("Cardiologia"));
     }
 
     @Test
-    @DisplayName("Deve consultar o acervo geral quando não houver disciplina selecionada na sessão")
-    void shouldQueryGlobalRagWhenNoSubjectSelected() {
-        ChatSessionState session = registeredSession(ChatState.RAG_DOUBT_MODE);
+    @DisplayName("Deve enviar ao tutor o perfil acadêmico do aluno como contexto")
+    void shouldSendStudentProfileAsTutorContext() {
+        ChatSessionState session = registeredSession(ChatState.DOUBT_MODE);
         when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
-        when(subjectRagService.answerDoubt(anyString(), eq(null))).thenReturn("Resposta geral.");
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(courseRepository.findById(course.getId())).thenReturn(Optional.of(course));
+        when(studentCourseRepository.findByStudentIdAndCourseId(student.getId(), course.getId()))
+                .thenReturn(Optional.of(StudentCourse.builder()
+                        .student(student).course(course).academicPeriod(5).build()));
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Resposta.");
 
         orchestrator.processIncomingMessage(message("o que é sepse?"));
 
-        verify(subjectRagService).answerDoubt("o que é sepse?", null);
-        assertTrue(lastSentMessage().contains("Acervo geral"));
+        ArgumentCaptor<TutorContextDto> context = ArgumentCaptor.forClass(TutorContextDto.class);
+        verify(aiTutorService).answer(context.capture(), eq("o que é sepse?"));
+        TutorContextDto sent = context.getValue();
+        assertEquals(PHONE, sent.phoneNumber());
+        assertEquals(student.displayName(), sent.studentName());
+        assertEquals("Medicina", sent.courseName());
+        assertEquals(5, sent.academicPeriod());
+        assertNull(sent.subjectName());
+        assertNull(sent.reviewQuestion());
+    }
+
+    @Test
+    @DisplayName("Deve responder a dúvida mesmo sem cadastro, curso ou matrícula encontrados")
+    void shouldAnswerDoubtEvenWhenProfileIsUnknown() {
+        ChatSessionState session = registeredSession(ChatState.DOUBT_MODE);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Resposta.");
+
+        orchestrator.processIncomingMessage(message("o que é sepse?"));
+
+        ArgumentCaptor<TutorContextDto> context = ArgumentCaptor.forClass(TutorContextDto.class);
+        verify(aiTutorService).answer(context.capture(), eq("o que é sepse?"));
+        assertNull(context.getValue().studentName());
+        assertNull(context.getValue().courseName());
+        assertNull(context.getValue().academicPeriod());
+        assertTrue(lastSentMessage().contains("Resposta."));
+    }
+
+    @Test
+    @DisplayName("Deve rotular a resposta como tema livre quando não houver disciplina em foco")
+    void shouldLabelAnswerAsFreeTopicWhenNoSubjectSelected() {
+        ChatSessionState session = registeredSession(ChatState.DOUBT_MODE);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Resposta geral.");
+
+        orchestrator.processIncomingMessage(message("o que é sepse?"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Tema livre"));
+        assertTrue(sent.contains("Resposta geral."));
+        assertFalse(sent.contains("Acervo"));
     }
 
     @Test
@@ -355,7 +403,10 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("2"));
 
         verify(intentRouterService, never()).classify(anyString());
-        assertEquals(ChatState.RAG_DOUBT_MODE, session.getCurrentState());
+        assertEquals(ChatState.DOUBT_MODE, session.getCurrentState());
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Modo Dúvidas"));
+        assertFalse(sent.contains("acervo"));
     }
 
     // =========================================================================
@@ -524,8 +575,8 @@ class ChatFlowOrchestratorImplTest {
     }
 
     @Test
-    @DisplayName("Deve consultar o RAG e reenviar a questão quando o aluno tiver dúvida em revisão")
-    void shouldQueryRagAndResendQuestionWhenDoubtDuringReview() {
+    @DisplayName("Deve pedir ajuda ao tutor com a questão em revisão e reenviá-la sem tocar no MMEEBB")
+    void shouldAskTutorWithReviewQuestionAndResendItWhenDoubtDuringReview() {
         ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
         session.setCurrentFlashcardId(flashcard.getId());
 
@@ -533,18 +584,25 @@ class ChatFlowOrchestratorImplTest {
         when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
         when(flashcardRepository.findById(flashcard.getId())).thenReturn(Optional.of(flashcard));
         when(flashcardRepository.findSubjectIdById(flashcard.getId())).thenReturn(Optional.of(subject.getId()));
+        when(subjectRepository.findById(subject.getId())).thenReturn(Optional.of(subject));
         when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
                 .thenReturn(AnswerEvaluationDto.doubt());
-        when(subjectRagService.answerDoubt(anyString(), eq(subject.getId())))
-                .thenReturn("A cardioversão elétrica sincronizada é indicada porque...");
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString()))
+                .thenReturn("Pense no que define instabilidade hemodinâmica.");
 
         orchestrator.processIncomingMessage(message("não entendi, pode explicar essa questão?"));
 
-        verify(subjectRagService).answerDoubt(anyString(), eq(subject.getId()));
+        ArgumentCaptor<TutorContextDto> context = ArgumentCaptor.forClass(TutorContextDto.class);
+        verify(aiTutorService).answer(context.capture(), eq("não entendi, pode explicar essa questão?"));
+        TutorContextDto.ReviewQuestion review = context.getValue().reviewQuestion();
+        assertEquals("Arritmias", review.topic());
+        assertEquals("Qual a primeira conduta na FA instável?", review.question());
+        assertEquals("Cardioversão elétrica sincronizada", review.answer());
+        assertEquals("Cardiologia", context.getValue().subjectName());
         verify(adaptiveReviewService, never()).processAnswer(any(), any(), anyBoolean(), any());
 
         String sent = lastSentMessage();
-        assertTrue(sent.contains("cardioversão elétrica sincronizada é indicada"));
+        assertTrue(sent.contains("Pense no que define instabilidade hemodinâmica."));
         assertTrue(sent.contains("Qual a primeira conduta na FA instável?"));
     }
 
@@ -560,7 +618,7 @@ class ChatFlowOrchestratorImplTest {
         when(flashcardRepository.findSubjectIdById(flashcard.getId())).thenReturn(Optional.of(subject.getId()));
         when(answerEvaluationService.evaluate(anyString(), eq(flashcard)))
                 .thenReturn(AnswerEvaluationDto.doubt());
-        when(subjectRagService.answerDoubt(anyString(), eq(subject.getId()))).thenReturn("Explicação.");
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Explicação.");
 
         orchestrator.processIncomingMessage(message("por que não é outra conduta?"));
 
@@ -589,7 +647,7 @@ class ChatFlowOrchestratorImplTest {
     // =========================================================================
 
     @Test
-    @DisplayName("Deve encerrar a sessão e limpar o flashcard em curso ao receber 'sair'")
+    @DisplayName("Deve encerrar a sessão, limpar o flashcard em curso e esquecer a conversa ao receber 'sair'")
     void shouldHandleExitCommand() {
         ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
         session.setCurrentFlashcardId(flashcard.getId());
@@ -600,6 +658,19 @@ class ChatFlowOrchestratorImplTest {
         assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
         assertEquals(null, session.getCurrentFlashcardId());
         assertTrue(lastSentMessage().contains("Até logo"));
+        verify(aiTutorService).clearConversation(PHONE);
+    }
+
+    @Test
+    @DisplayName("Voltar ao menu não deve apagar a conversa com o tutor")
+    void shouldKeepTutorHistoryOnMenuReset() {
+        ChatSessionState session = registeredSession(ChatState.DOUBT_MODE);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+
+        orchestrator.processIncomingMessage(message("menu"));
+
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        verify(aiTutorService, never()).clearConversation(anyString());
     }
 
     @Test

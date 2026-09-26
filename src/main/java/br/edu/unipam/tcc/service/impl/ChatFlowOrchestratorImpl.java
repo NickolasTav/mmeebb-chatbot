@@ -3,6 +3,7 @@ package br.edu.unipam.tcc.service.impl;
 import br.edu.unipam.tcc.dto.AdaptiveReviewOutcomeDto;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
+import br.edu.unipam.tcc.dto.TutorContextDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.Flashcard;
@@ -23,11 +24,11 @@ import br.edu.unipam.tcc.repository.StudentCourseRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
 import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.AdaptiveReviewService;
+import br.edu.unipam.tcc.service.AiTutorService;
 import br.edu.unipam.tcc.service.AnswerEvaluationService;
 import br.edu.unipam.tcc.service.ChatFlowOrchestrator;
 import br.edu.unipam.tcc.service.IntentRouterService;
 import br.edu.unipam.tcc.service.StudentOnboardingService;
-import br.edu.unipam.tcc.service.SubjectRagService;
 import br.edu.unipam.tcc.session.ChatSessionState;
 import br.edu.unipam.tcc.session.ChatSessionStore;
 import lombok.RequiredArgsConstructor;
@@ -92,7 +93,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final FlashcardRepository flashcardRepository;
     private final RepetitionScheduleRepository repetitionScheduleRepository;
     private final AdaptiveReviewService adaptiveReviewService;
-    private final SubjectRagService subjectRagService;
+    private final AiTutorService aiTutorService;
     private final IntentRouterService intentRouterService;
     private final AnswerEvaluationService answerEvaluationService;
     private final StudentOnboardingService studentOnboardingService;
@@ -157,7 +158,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             case AWAITING_ACADEMIC_PERIOD -> handleAcademicPeriodInput(session, rawText);
             case MAIN_MENU -> handleMainMenuState(session, rawText);
             case REVIEW_MODE -> handleReviewModeState(session, rawText);
-            case RAG_DOUBT_MODE -> handleRagDoubtModeState(session, rawText);
+            case DOUBT_MODE -> answerDoubt(session, rawText);
             case SETTINGS_MENU, SETTINGS_AWAITING_NAME, SETTINGS_AWAITING_TIME,
                  SETTINGS_AWAITING_COURSE, SETTINGS_AWAITING_PERIOD ->
                     studentSettingsFlowHandler.handle(session, rawText);
@@ -328,7 +329,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 %s
 
-                💬 _Você também pode escrever livremente: pergunte qualquer dúvida de conteúdo que eu consulto o acervo da sua disciplina._""",
+                💬 _Você também pode escrever livremente: mande qualquer dúvida de conteúdo que eu te explico._""",
                 student.displayName(),
                 pending,
                 student.getPreferredStudyTime().format(DateTimeFormatter.ofPattern("HH:mm")),
@@ -375,7 +376,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             case EXIT -> handleExitCommand(session);
             case ASK_DOUBT -> {
                 // Responde a dúvida imediatamente e mantém o aluno no modo de perguntas.
-                transitionTo(session, ChatState.RAG_DOUBT_MODE);
+                transitionTo(session, ChatState.DOUBT_MODE);
                 answerDoubt(session, rawText);
             }
         }
@@ -383,7 +384,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
     /**
      * Associa a disciplina citada em texto livre ("dúvida em cardiologia") ao escopo da sessão,
-     * restringindo a busca vetorial a essa disciplina.
+     * para que o tutor a use como disciplina em foco.
      */
     private void applySubjectHint(ChatSessionState session, String subjectHint) {
         if (subjectHint == null || subjectHint.isBlank() || session.getSelectedCourseId() == null) {
@@ -402,11 +403,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     private void enterDoubtMode(ChatSessionState session) {
-        transitionTo(session, ChatState.RAG_DOUBT_MODE);
+        transitionTo(session, ChatState.DOUBT_MODE);
         send(session, """
                 💡 *Modo Dúvidas ativado*
 
-                Envie sua pergunta sobre qualquer conteúdo do acervo que eu consulto o material da sua disciplina.
+                Mande sua dúvida de qualquer conteúdo do seu curso. Eu lembro do que conversamos nos últimos 30 minutos, então pode pedir para eu aprofundar ou dar exemplos.
 
                 _Digite *menu* a qualquer momento para voltar._""");
     }
@@ -506,21 +507,20 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     /**
-     * O estudante pediu ajuda sobre a questão ativa em vez de tentar respondê-la. Consulta o RAG
-     * com o contexto da pergunta, escopado pela disciplina do próprio flashcard (conhecida com
-     * certeza, ao contrário do modo de dúvidas livre do menu principal), e reenvia a mesma questão
-     * sem tocar no agendamento MMEEBB.
+     * O estudante pediu ajuda sobre a questão ativa em vez de tentar respondê-la. O tutor recebe a
+     * questão completa, inclusive o gabarito, com a regra de não entregá-lo (spec-09, RN-04), e a
+     * mesma questão é reenviada sem tocar no agendamento MMEEBB.
      */
     private void handleReviewDoubt(ChatSessionState session, Flashcard card, String doubtText) {
         log.info("[Orchestrator] Dúvida em revisão de [{}] sobre o flashcard {}: \"{}\"",
                 session.getPhoneNumber(), card.getId(), doubtText);
 
         Long subjectId = flashcardRepository.findSubjectIdById(card.getId()).orElse(null);
-        String contextualQuestion = String.format(
-                "Contexto da questão em revisão: %s%nDúvida do estudante sobre essa questão: %s",
-                card.getQuestion(), doubtText);
+        TutorContextDto.ReviewQuestion reviewQuestion = new TutorContextDto.ReviewQuestion(
+                card.getTopic(), card.getQuestion(), card.getOptionsJson(), card.getAnswer(), card.getExplanation());
 
-        String ragAnswer = subjectRagService.answerDoubt(contextualQuestion, subjectId);
+        String explanation = aiTutorService.answer(
+                buildTutorContext(session, findSubjectName(subjectId).orElse(null), reviewQuestion), doubtText);
 
         send(session, String.format("""
                 🧠 *Tirando sua dúvida sobre esta questão*
@@ -531,7 +531,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 Quando estiver pronto, responda a questão abaixo novamente:
 
-                %s""", ragAnswer, formatFlashcard(card)));
+                %s""", explanation, formatFlashcard(card)));
     }
 
     /**
@@ -580,23 +580,19 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     // =========================================================================
-    // Modo dúvidas (RAG)
+    // Modo dúvidas (tutor de IA)
     // =========================================================================
 
-    private void handleRagDoubtModeState(ChatSessionState session, String questionText) {
-        answerDoubt(session, questionText);
-    }
-
     private void answerDoubt(ChatSessionState session, String questionText) {
-        log.info("[Orchestrator] Dúvida RAG de [{}] (disciplina {}): \"{}\"",
+        log.info("[Orchestrator] Dúvida de [{}] para o tutor (disciplina {}): \"{}\"",
                 session.getPhoneNumber(), session.getSelectedSubjectId(), questionText);
 
-        String answer = subjectRagService.answerDoubt(questionText, session.getSelectedSubjectId());
+        Optional<String> subjectName = findSubjectName(session.getSelectedSubjectId());
+        String answer = aiTutorService.answer(buildTutorContext(session, subjectName.orElse(null), null), questionText);
 
-        String header = Optional.ofNullable(session.getSelectedSubjectId())
-                .flatMap(subjectRepository::findById)
-                .map(subject -> "📖 *" + subject.getName() + "*")
-                .orElse("🌐 *Acervo geral*");
+        String header = subjectName
+                .map(name -> "📖 *" + name + "*")
+                .orElse("🌐 *Tema livre*");
 
         send(session, String.format("""
                 🤖 *Tutor Virtual UNIPAM* (%s)
@@ -607,6 +603,39 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 _Envie outra dúvida ou digite *menu* para voltar._""", header, answer));
     }
 
+    private Optional<String> findSubjectName(Long subjectId) {
+        return Optional.ofNullable(subjectId)
+                .flatMap(subjectRepository::findById)
+                .map(Subject::getName);
+    }
+
+    /**
+     * Resolve o perfil acadêmico que orienta o tutor. Nada aqui interrompe a dúvida: o que não for
+     * encontrado simplesmente fica fora do prompt (spec-09, RN-02).
+     */
+    private TutorContextDto buildTutorContext(ChatSessionState session, String subjectName,
+                                              TutorContextDto.ReviewQuestion reviewQuestion) {
+        java.util.UUID studentId = session.getStudentId();
+        Long courseId = session.getSelectedCourseId();
+
+        String studentName = Optional.ofNullable(studentId)
+                .flatMap(studentRepository::findById)
+                .map(Student::displayName)
+                .orElse(null);
+        String courseName = Optional.ofNullable(courseId)
+                .flatMap(courseRepository::findById)
+                .map(Course::getName)
+                .orElse(null);
+        Integer academicPeriod = studentId == null || courseId == null
+                ? null
+                : studentCourseRepository.findByStudentIdAndCourseId(studentId, courseId)
+                        .map(StudentCourse::getAcademicPeriod)
+                        .orElse(null);
+
+        return new TutorContextDto(session.getPhoneNumber(), studentName, courseName, academicPeriod,
+                subjectName, reviewQuestion);
+    }
+
     // =========================================================================
     // Comandos globais
     // =========================================================================
@@ -614,6 +643,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private void handleExitCommand(ChatSessionState session) {
         log.info("[Orchestrator] Comando de saída recebido de [{}]", session.getPhoneNumber());
         session.clearReviewContext();
+        aiTutorService.clearConversation(session.getPhoneNumber());
         transitionTo(session, ChatState.MAIN_MENU);
 
         send(session, """

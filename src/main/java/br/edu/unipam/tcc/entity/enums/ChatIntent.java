@@ -3,7 +3,7 @@ package br.edu.unipam.tcc.entity.enums;
 public enum ChatIntent {
     /** Quer iniciar uma sessão de revisão de flashcards. */
     START_REVIEW,
-    /** Fez uma pergunta de conteúdo que deve ser respondida pelo RAG. */
+    /** Fez uma pergunta de conteúdo que deve ser respondida pelo tutor de IA. */
     ASK_DOUBT,
     /** Quer ver ou alterar suas configurações: apelido, lembrete, curso ou período. */
     OPEN_SETTINGS,

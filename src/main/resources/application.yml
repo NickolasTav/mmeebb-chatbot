@@ -114,6 +114,11 @@ admin:
 mmeebb:
   session:
     ttl-minutes: ${MMEEBB_SESSION_TTL_MINUTES:60}
+  tutor:
+    # Trocas (pergunta + resposta) que o tutor de IA lembra por aluno.
+    history-max-turns: ${MMEEBB_TUTOR_HISTORY_MAX_TURNS:6}
+    # Minutos sem conversa ate o tutor esquecer o assunto.
+    history-ttl-minutes: ${MMEEBB_TUTOR_HISTORY_TTL_MINUTES:30}
   scheduler:
     cron: ${MMEEBB_SCHEDULER_CRON:0 */5 * * * *}
   adaptive:

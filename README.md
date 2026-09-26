@@ -46,7 +46,7 @@ Estudantes de graduações densas — em especial os cursos de **Medicina** dura
 1. **Sobrecarga Cognitiva e Fadiga:** Dificuldade extrema em encontrar tempo dedicado para abrir aplicativos tradicionais de estudo (como Anki ou flashcards manuais).
 2. **Declínio Rápido da Retenção:** Conhecimentos clínicos e diagnósticos complexos são rapidamente esquecidos se não forem reforçados ativamente em intervalos matematicamente dosados.
 
-Este projeto propõe e implementa um **Chatbot Inteligente no WhatsApp** que automatiza o agendamento de revisões ativas com o método **MMEEBB**, atua como um **Preceptor/Tutor Médico Virtual via IA Generativa (Google Gemini + RAG)** e elimina toda a fricção de uso ao entregar os questionamentos diretamente no canal de comunicação mais acessado pelo estudante.
+Este projeto propõe e implementa um **Chatbot Inteligente no WhatsApp** que automatiza o agendamento de revisões ativas com o método **MMEEBB**, atua como um **Preceptor/Tutor Médico Virtual via IA Generativa (Google Gemini, com o contexto acadêmico do aluno e memória curta da conversa)** e elimina toda a fricção de uso ao entregar os questionamentos diretamente no canal de comunicação mais acessado pelo estudante.
 
 O sistema vai além do cálculo fixo de intervalo: ele **mede em quais conteúdos cada aluno erra mais e ajusta as revisões a isso**, encurtando o ciclo dos tópicos frágeis, priorizando-os na fila do dia e antecipando questões relacionadas após um erro — sem abandonar a base binária do método (ver [seção 3.1](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo)).
 
@@ -152,6 +152,7 @@ flowchart LR
 | Classificar o domínio do tópico | ⚙️ Determinístico | Precisa ser reprodutível e auditável diante da banca |
 | Decidir o intervalo | ⚙️ Determinístico | É o algoritmo do TCC; precisa ser verificável |
 | Explicar o desempenho ao aluno | 🤖 Gemini | Linguagem natural é onde o modelo agrega |
+| Tirar dúvidas de conteúdo | 🤖 Gemini | Livre, orientado pelo perfil do aluno e pela conversa; na revisão, explica sem entregar o gabarito |
 
 Toda decisão que diverge do MMEEBB clássico é **explicada na própria mensagem** do WhatsApp — um intervalo que encurta depois de um acerto, sem justificativa, seria lido pelo aluno como defeito do sistema.
 
@@ -181,7 +182,7 @@ flowchart TB
         ORCH -->|2. Avaliação de Respostas| ADAPT[AdaptiveReviewService]
         ADAPT --> ANALYSIS[PerformanceAnalysisService<br/>domínio por tópico]
         ADAPT --> MMEEBB[MmeebbService 2^n<br/>com teto adaptativo]
-        ORCH -->|3. Dúvidas Clínicas & RAG| RAG[SubjectRagService + Gemini]
+        ORCH -->|3. Dúvidas com contexto do aluno| TUTOR[AiTutorService + Gemini]
         ORCH -->|4. Relatório de Desempenho| PERF[StudentPerformanceFlowHandler]
         
         SCHED[DailyReviewNotificationScheduler] -->|Rodada 5min: horário de cada aluno| Q_OUT[whatsapp.outgoing.queue]
@@ -194,14 +195,14 @@ flowchart TB
 
     subgraph Persistence_Layer [Camada de Persistência & IA]
         PG[(PostgreSQL 16 Relacional)]
-        VEC[(pgvector Embeddings 768d)]
+        HIST[(Redis<br/>histórico do tutor 30 min)]
         FLY[Flyway Migrations]
         GEMINI[Google Gemini 3.5 Flash-Lite<br/>+ Failover 3.5 Flash]
     end
 
     ORCH <--> PG
-    RAG <--> VEC
-    RAG <--> GEMINI
+    TUTOR <--> HIST
+    TUTOR <--> GEMINI
 ```
 
 ### 4.1. Máquina de Estados Finita (FSM) & Comandos Conversacionais
@@ -227,7 +228,7 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 | Intenção | Gatilhos | Comportamento |
 | :--- | :--- | :--- |
 | **📚 START_REVIEW** | `1`, ou texto livre como *"quero estudar um pouco"* | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
-| **💡 ASK_DOUBT** | `2`, ou qualquer pergunta de conteúdo | Responde via RAG. Se a mensagem citar uma disciplina (*"dúvida de cardiologia"*), a busca é particionada por `subject_id`. |
+| **💡 ASK_DOUBT** | `2`, ou qualquer pergunta de conteúdo | Responde pelo tutor de IA com o perfil do aluno (curso, período, disciplina citada em *"dúvida de cardiologia"*) e as últimas 6 trocas da conversa (30 min). Não há base de conhecimento: a IA responde livremente, com diretrizes de segurança no prompt. |
 | **⚙️ OPEN_SETTINGS** | `3`, `configurações`, `config`, `ajustes`, ou *"quero mudar meu horário"* | Abre o menu de Configurações (nome de tratamento, horário do lembrete, pausar lembretes, curso e período). |
 | **📊 SHOW_PERFORMANCE** | `4`, `desempenho`, `progresso`, `estatísticas`, `como estou`, ou *"será que estou melhorando?"* | Envia o relatório de desempenho: taxa de acerto, tópicos em que mais erra (com o teto de intervalo ativo em cada um), conteúdos consolidados e a leitura do preceptor virtual. |
 | **📋 SHOW_MENU** | `menu`, `oi`, `bom dia`, `ajuda` | Reexibe o menu principal. |
@@ -239,11 +240,11 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 
 Múltipla escolha é resolvida por comparação direta e também aceita a letra da alternativa colada por extenso pelo aluno (`"A) Inibidor de SGLT2..."`); respostas dissertativas passam por **correção semântica via Gemini**, que aceita o conceito correto expresso com palavras próprias e devolve um comentário pedagógico curto.
 
-O resultado dessa correção não é descartado: ele vira um evento em `tb_review_attempt` e alimenta a [personalização adaptativa](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo). Pedidos de ajuda (*"não entendi, pode explicar?"*) são detectados como dúvida, respondidos pelo RAG e **não contam como erro** — contabilizá-los puniria justamente quem pede explicação.
+O resultado dessa correção não é descartado: ele vira um evento em `tb_review_attempt` e alimenta a [personalização adaptativa](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo). Pedidos de ajuda (*"não entendi, pode explicar?"*) são detectados como dúvida, respondidos pelo tutor de IA — que recebe o gabarito, mas é proibido de revelá-lo — e **não contam como erro** — contabilizá-los puniria justamente quem pede explicação.
 
 ### 4.2. Resiliência do Gemini (Retry & Failover Automático)
 
-O LangChain4j 0.35.0 usa por padrão um timeout rígido de 10s no `OkHttpClient` do cliente Gemini, insuficiente para respostas de RAG mais elaboradas. O `GeminiServiceCustomizer` (`dev.langchain4j.model.googleai`) substitui o `OkHttpClient` interno via reflection e adiciona:
+O LangChain4j 0.35.0 usa por padrão um timeout rígido de 10s no `OkHttpClient` do cliente Gemini, insuficiente para respostas mais elaboradas do tutor. O `GeminiServiceCustomizer` (`dev.langchain4j.model.googleai`) substitui o `OkHttpClient` interno via reflection e adiciona:
 
 - **Timeouts estendidos:** `connect`/`read`/`write`/`call` de 60s (`DEFAULT_TIMEOUT` em `LangChain4jConfig`), eliminando `SocketTimeoutException` em respostas mais longas do Tutor Clínico.
 - **Interceptor de alta demanda (`HighDemandRetryInterceptor`):** intercepta HTTP `503` (High Demand) e `429` (Rate Limit) do Google, retentando até 3 vezes com backoff progressivo (800ms, 1600ms).
@@ -253,7 +254,7 @@ O LangChain4j 0.35.0 usa por padrão um timeout rígido de 10s no `OkHttpClient`
 
 ## 5. Modelagem de Dados & DER
 
-O banco de dados adota modelagem dinâmica multi-curso e multi-disciplina, particionando embeddings vetoriais para evitar cruzamento indevido de conteúdos no módulo RAG:
+O banco de dados adota modelagem dinâmica multi-curso e multi-disciplina:
 
 ```mermaid
 erDiagram
@@ -266,8 +267,6 @@ erDiagram
     STUDENT ||--o{ REVIEW_ATTEMPT : responde
     FLASHCARD ||--o{ REVIEW_ATTEMPT : registrado_em
     STUDENT ||--o{ CHAT_SESSION : mantem
-    COURSE ||--o{ KNOWLEDGE_EMBEDDING : escopo
-    SUBJECT ||--o{ KNOWLEDGE_EMBEDDING : escopo
 
     COURSE {
         bigint id PK
@@ -337,20 +336,12 @@ erDiagram
         uuid id PK
         uuid student_id FK
         string phone_number UK
-        string current_state "NEW | MAIN_MENU | REVIEW_MODE | RAG_DOUBT_MODE"
+        string current_state "NEW | MAIN_MENU | REVIEW_MODE | DOUBT_MODE"
         bigint selected_course_id FK
         bigint selected_subject_id FK
         bigint current_flashcard_id FK
         jsonb context_data
         timestamp last_interaction_at
-    }
-    KNOWLEDGE_EMBEDDING {
-        uuid id PK
-        bigint course_id FK
-        bigint subject_id FK
-        text content
-        vector embedding "768 dimensões"
-        jsonb metadata "Filtros course_id e subject_id"
     }
 ```
 
@@ -362,12 +353,10 @@ erDiagram
 | :--- | :--- | :--- |
 | **Backend** | Java 17 + Spring Boot 3.3.x | Core da aplicação e regras de negócio |
 | **Banco Relacional** | PostgreSQL 16 | Persistência transacional das entidades e agendamentos |
-| **Banco Vetorial** | `pgvector` (PostgreSQL extension) | Armazenamento de embeddings semânticos para o RAG |
 | **Migrations** | Flyway | Versionamento e automação do schema SQL |
 | **Mensageria** | RabbitMQ 3 Management | Desacoplamento assíncrono, buffers e proteção anti-ban |
-| **Estado Conversacional** | Redis 7 | FSM do chatbot com TTL, sem escrita relacional por mensagem |
-| **IA / LLM & RAG** | Google Gemini 3.5 Flash-Lite (fallback 3.5 Flash) + LangChain4j 0.35.0 | Preceptor clínico, roteamento de intenção e RAG, com interceptor de retry/failover automático em 503/429 |
-| **Parser Universal** | Apache Tika | Extração de texto de PDFs, DOCX e Markdown para ingestão |
+| **Estado Conversacional** | Redis 7 | FSM do chatbot e histórico curto do tutor, ambos com TTL, sem escrita relacional por mensagem |
+| **IA / LLM** | Google Gemini 3.5 Flash-Lite (fallback 3.5 Flash) + LangChain4j 0.35.0 | Tutor acadêmico com contexto do aluno, roteamento de intenção, correção semântica e diagnóstico de desempenho, com retry/failover automático em 503/429 |
 | **Gateway WhatsApp** | Uazapi / UazapiGO | Conexão com o WhatsApp, webhooks e envio de mensagens |
 | **Túnel Local** | Ngrok | Exposição segura da porta `8080` para recepção de eventos |
 | **Testes** | JUnit 5, Mockito, Spring Test | Metodologia TDD com 100% de cobertura de serviços |
@@ -400,7 +389,6 @@ Preencha suas chaves no `.env`:
 # Google Gemini (Chave gratuita em: https://aistudio.google.com/app/apikey)
 GEMINI_API_KEY=sua_chave_gemini_aqui
 GEMINI_MODEL_NAME=gemini-3.5-flash-lite
-GEMINI_EMBEDDING_MODEL_NAME=gemini-embedding-001
 GEMINI_TEMPERATURE=0.2
 
 # Chave de Administração REST
@@ -420,35 +408,9 @@ Em seguida, inicialize a aplicação:
 ```
 
 > **💡 Dica de Custo/Performance com Google Gemini:**  
-> O modelo padrão configurado é o **`gemini-3.5-flash`** (ou `gemini-3.6-flash`), a geração mais moderna, econômica e de altíssima velocidade do Google. Para a geração de vetores semânticos do RAG, utilizamos o modelo oficial **`gemini-embedding-001`** configurado com `outputDimensionality: 768` (dimensões compatíveis com o índice HNSW do pgvector).
+> O modelo padrão configurado é o **`gemini-3.5-flash`** (ou `gemini-3.6-flash`), a geração mais moderna, econômica e de altíssima velocidade do Google. O mesmo modelo atende o tutor de dúvidas, o roteamento de intenção e a correção de respostas — não há modelo de embeddings nem base vetorial para manter.
 
-### Passo 3: Sincronizar Flashcards e Questões no RAG (pgvector)
-Para que o tutor virtual responda a qualquer dúvida clínica ou técnica no WhatsApp com base no acervo de mais de 85 questões cadastradas, execute a sincronização via endpoint administrativo:
-
-```powershell
-curl.exe -i -X POST "http://localhost:8080/api/admin/rag/sync-flashcards" -H "X-API-KEY: teste"
-```
-*(Ou passe `?courseId=1` ou `?subjectId=1` para sincronizar uma disciplina específica).*
-
-#### Cadastrando conteúdo por payload
-
-Para indexar material novo sem depender de arquivos no servidor, envie o conteúdo no corpo da requisição. Curso, disciplina e tópico viram **metadados do embedding**, o que permite particionar a busca vetorial por matéria:
-
-```powershell
-curl.exe -i -X POST "http://localhost:8080/api/admin/rag/ingest" `
-  -H "X-API-KEY: teste" -H "Content-Type: application/json" `
-  -d '{
-        "courseId": 1,
-        "subjectId": 10,
-        "topic": "Arritmias",
-        "title": "Manejo da Fibrilação Atrial",
-        "content": "Na FA com instabilidade hemodinâmica, a conduta é a cardioversão elétrica sincronizada..."
-      }'
-```
-
-O texto é segmentado (300 tokens, overlap de 30) e cada trecho recebe `course_id`, `subject_id` e `topic`. A API valida que a disciplina informada pertence de fato ao curso informado.
-
-#### Acompanhando o desempenho do grupo piloto
+### Passo 3: Acompanhar o desempenho do grupo piloto
 
 Os dois endpoints abaixo expõem os dados de retenção que embasam a seção de resultados da monografia — o mesmo diagnóstico que o aluno vê no WhatsApp, em formato consultável:
 
@@ -508,6 +470,8 @@ ngrok http 8080
 | `MMEEBB_ADAPTIVE_CONSOLIDATING_ERROR_RATE` | `0.20` | Taxa de erro que classifica o tópico como em consolidação (teto de 64 dias) |
 | `MMEEBB_ADAPTIVE_REINFORCEMENT_MAX_CARDS` | `2` | Questões do mesmo tópico antecipadas como reforço após erro em tópico frágil |
 | `MMEEBB_ADAPTIVE_REPORT_MIN_ATTEMPTS` | `5` | Respostas mínimas antes de exibir percentuais no relatório de desempenho |
+| `MMEEBB_TUTOR_HISTORY_MAX_TURNS` | `6` | Trocas (pergunta + resposta) que o tutor de IA lembra por aluno |
+| `MMEEBB_TUTOR_HISTORY_TTL_MINUTES` | `30` | Minutos sem conversa até o tutor esquecer o assunto |
 | `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi |
 | `UAZAPI_API_KEY` | *(Vazio)* | Token/Chave de autenticação da Uazapi |
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
@@ -515,7 +479,6 @@ ngrok http 8080
 | `UAZAPI_TYPING_DELAY_MS` | `2000` | Delay simulado de digitação (*composing*) |
 | `GEMINI_API_KEY` | *(Vazio)* | Chave de API do Google AI Studio (Gemini) |
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash-lite` | Modelo de chat principal (failover automático para `gemini-3.5-flash` em picos de demanda) |
-| `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | Modelo de embeddings do RAG (768 dimensões) |
 | `GEMINI_TEMPERATURE` | `0.2` | Temperatura do modelo de chat (baixa, para respostas clínicas objetivas) |
 | `ADMIN_API_KEY` | `teste` | Chave de segurança para endpoints `/api/admin/**` **e `/api/v1/setup/**`** (painel de conectividade) |
 | `NGROK_CLIENT_API_URL` | `http://127.0.0.1:4040` | URL da API local de controle do Ngrok, usada pelo painel `/setup` para descobrir a URL pública do túnel |
@@ -563,15 +526,15 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 428
+- **Total de Testes Unitários:** 447
 - **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Ingestão e Sincronização RAG (particionada e global), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso), **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook) e **Personalização Adaptativa** (classificação de domínio por tópico, teto de intervalo, lapso graduado, fila priorizada, reforço dirigido e relatório de desempenho).
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Tutor de IA com contexto e histórico (sem revelar gabarito em revisão), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso), **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook) e **Personalização Adaptativa** (classificação de domínio por tópico, teto de intervalo, lapso graduado, fila priorizada, reforço dirigido e relatório de desempenho).
 
 > **Teste-chave do algoritmo:** `MmeebbServiceImplTest` percorre $n = 0 \dots 13$, em acerto e em erro, comparando a versão adaptativa sem histórico contra a clássica. É a prova executável de que a personalização **não descaracteriza o MMEEBB** — a contribuição central do trabalho permanece verificável.
 
 > O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
 
-> Os testes `RepetitionScheduleRepositoryTest` e `ReviewAttemptRepositoryTest` sobem um **Postgres real com pgvector via Testcontainers** e aplicam as migrations Flyway para validar o filtro de matrícula ativa, as consultas do reforço dirigido e as agregações de desempenho — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, eles são ignorados automaticamente.
+> Os testes `RepetitionScheduleRepositoryTest`, `ReviewAttemptRepositoryTest` e `KnowledgeBaseRemovalMigrationTest` sobem um **Postgres real (imagem pgvector, exigida pela V1 histórica) via Testcontainers** e aplicam as migrations Flyway para validar o filtro de matrícula ativa, as consultas do reforço dirigido, as agregações de desempenho e a remoção da antiga base vetorial (V9) — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, eles são ignorados automaticamente.
 
 ---
 
@@ -591,10 +554,10 @@ c:\projeto-tcc
 │   ├── observability/   # Métricas de domínio (Micrometer) e correlação de logs
 │   ├── repository/      # Repositórios Spring Data JPA
 │   ├── scheduler/       # Rotinas de disparo diário de revisões (@Scheduled)
-│   ├── session/         # FSM conversacional no Redis (ChatSessionStore, ChatSessionState)
+│   ├── session/         # FSM conversacional e histórico do tutor no Redis (ChatSessionStore, ConversationHistoryStore)
 │   └── service/         # Interfaces e Implementações de regras de negócio
 │       └── impl/        # ChatFlowOrchestrator, MmeebbService, AdaptiveReviewService,
-│                        # PerformanceAnalysisService, SubjectRagService, IntentRouterService...
+│                        # PerformanceAnalysisService, AiTutorService, IntentRouterService...
 ├── src/main/java/dev/langchain4j/model/googleai/
 │   └── GeminiServiceCustomizer.java  # Timeout estendido + retry/failover 503/429 no cliente Gemini
 ├── src/main/resources/

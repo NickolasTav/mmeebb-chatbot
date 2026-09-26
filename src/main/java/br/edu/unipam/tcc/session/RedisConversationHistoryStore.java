@@ -53,7 +53,11 @@ public class RedisConversationHistoryStore implements ConversationHistoryStore {
         List<ConversationTurn> turns = new ArrayList<>(raw.size());
         for (String json : raw) {
             try {
-                turns.add(objectMapper.readValue(json, ConversationTurn.class));
+                // Um item "null" é lido pelo Jackson como null, sem exceção: descartá-lo aqui.
+                ConversationTurn turn = objectMapper.readValue(json, ConversationTurn.class);
+                if (turn != null) {
+                    turns.add(turn);
+                }
             } catch (JsonProcessingException e) {
                 // Uma troca ilegível não pode derrubar a dúvida do aluno: o histórico é só contexto.
                 log.warn("[ConversationHistory] Troca ilegível ignorada para [{}]: {}", phoneNumber, e.getMessage());

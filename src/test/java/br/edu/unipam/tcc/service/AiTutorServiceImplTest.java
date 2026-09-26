@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -211,6 +212,20 @@ class AiTutorServiceImplTest {
         assertThat(answer).contains("instabilidade momentânea");
         verify(conversationHistoryStore, never()).append(anyString(), anyString(), anyString());
         verify(mmeebbMetrics).recordAiInteraction("tutor", "fallback");
+    }
+
+    @Test
+    @DisplayName("Falha ao gravar o histórico não pode descartar uma resposta que o Gemini já deu")
+    void deveEntregarARespostaMesmoQuandoGravarOHistoricoFalhar() {
+        givenGeminiAnswers("Sepse é uma disfunção orgânica.");
+        doThrow(new IllegalStateException("Redis recusou a escrita"))
+                .when(conversationHistoryStore).append(anyString(), anyString(), anyString());
+
+        String answer = tutor.answer(freeContext(), "o que é sepse?");
+
+        assertThat(answer).isEqualTo("Sepse é uma disfunção orgânica.");
+        verify(mmeebbMetrics).recordAiInteraction("tutor", "gemini");
+        verify(mmeebbMetrics, never()).recordAiInteraction("tutor", "fallback");
     }
 
     @Test

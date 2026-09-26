@@ -86,14 +86,26 @@ public class AiTutorServiceImpl implements AiTutorService {
             }
 
             String answer = text.trim();
-            conversationHistoryStore.append(phoneNumber, trimmedQuestion, answer);
             mmeebbMetrics.recordAiInteraction("tutor", "gemini");
+            remember(phoneNumber, trimmedQuestion, answer);
             return answer;
 
         } catch (Exception e) {
             mmeebbMetrics.recordAiInteraction("tutor", "fallback");
             log.error("[AiTutor] Falha ao responder a dúvida de [{}]: {}", phoneNumber, e.getMessage(), e);
             return UNAVAILABLE_MESSAGE;
+        }
+    }
+
+    /**
+     * O histórico é só contexto: se o Redis recusar a gravação, o aluno ainda recebe a resposta
+     * que o Gemini já deu; a próxima dúvida apenas chega sem esta troca.
+     */
+    private void remember(String phoneNumber, String question, String answer) {
+        try {
+            conversationHistoryStore.append(phoneNumber, question, answer);
+        } catch (Exception e) {
+            log.warn("[AiTutor] Troca de [{}] não foi gravada no histórico: {}", phoneNumber, e.getMessage());
         }
     }
 

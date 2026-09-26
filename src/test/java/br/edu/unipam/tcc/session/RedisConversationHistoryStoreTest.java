@@ -89,6 +89,17 @@ class RedisConversationHistoryStoreTest {
     }
 
     @Test
+    @DisplayName("Deve ignorar um item 'null' literal na lista, que o Jackson lê sem lançar exceção")
+    void shouldSkipLiteralNullTurn() {
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+        when(listOperations.range(KEY, 0, -1)).thenReturn(List.of(
+                "null",
+                "{\"question\":\"q2\",\"answer\":\"a2\"}"));
+
+        assertThat(store.recent(PHONE)).containsExactly(new ConversationTurn("q2", "a2"));
+    }
+
+    @Test
     @DisplayName("Deve apagar toda a conversa do telefone")
     void shouldClearHistory() {
         store.clear(PHONE);

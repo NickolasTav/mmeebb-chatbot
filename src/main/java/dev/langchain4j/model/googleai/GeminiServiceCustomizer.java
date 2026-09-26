@@ -65,34 +65,6 @@ public class GeminiServiceCustomizer {
         }
     }
 
-    public static void configureTimeouts(GoogleAiEmbeddingModel model, Duration timeout) {
-        try {
-            Field field = GoogleAiEmbeddingModel.class.getDeclaredField("geminiService");
-            field.setAccessible(true);
-
-            OkHttpClient client = new OkHttpClient.Builder()
-                    .callTimeout(timeout)
-                    .connectTimeout(timeout)
-                    .readTimeout(timeout)
-                    .writeTimeout(timeout)
-                    .dispatcher(newDispatcher())
-                    .connectionPool(new ConnectionPool(10, 5, TimeUnit.MINUTES))
-                    .addInterceptor(new HighDemandRetryInterceptor(false))
-                    .build();
-
-            Retrofit retrofit = new Retrofit.Builder()
-                    .baseUrl(GeminiService.GEMINI_AI_ENDPOINT)
-                    .addConverterFactory(GsonConverterFactory.create())
-                    .client(client)
-                    .build();
-
-            GeminiService customService = retrofit.create(GeminiService.class);
-            field.set(model, customService);
-        } catch (Exception e) {
-            throw new RuntimeException("Falha ao configurar timeouts customizados no GeminiService de Embedding", e);
-        }
-    }
-
     private static class HighDemandRetryInterceptor implements Interceptor {
         private final boolean enableModelFailover;
 

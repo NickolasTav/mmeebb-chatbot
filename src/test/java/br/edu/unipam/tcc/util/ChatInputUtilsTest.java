@@ -30,6 +30,37 @@ class ChatInputUtilsTest {
         assertEquals(Optional.empty(), ChatInputUtils.parseSelection("3", options));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "\"{0}\" -> {1}")
+    @DisplayName("Deve extrair a letra escolhida: letra solta, 'letra B', alternativa colada")
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "B | B",
+            "b | B",
+            "B) | B",
+            "letra c | C",
+            "Alternativa D | D",
+            "opção a | A",
+            "A) Estatina | A",
+            "  e  | E"
+    })
+    void deveExtrairLetraEscolhida(String answer, String letter) {
+        assertEquals(Optional.of(letter), ChatInputUtils.choiceLetter(answer));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "\"{0}\"")
+    @DisplayName("Não deve ver letra em texto livre")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "não sei", "estatina", "acho que é fibrato", "", "   "
+    })
+    void naoDeveVerLetraEmTextoLivre(String answer) {
+        assertEquals(Optional.empty(), ChatInputUtils.choiceLetter(answer));
+    }
+
+    @Test
+    @DisplayName("Resposta nula não tem letra")
+    void respostaNulaNaoTemLetra() {
+        assertEquals(Optional.empty(), ChatInputUtils.choiceLetter(null));
+    }
+
     @Test
     @DisplayName("Deve numerar a lista em negrito no padrão do WhatsApp")
     void deveNumerarListaEmNegrito() {

@@ -14,6 +14,7 @@ import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatIntent;
 import br.edu.unipam.tcc.entity.enums.ChatState;
+import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
 import br.edu.unipam.tcc.entity.enums.TopicMastery;
 import br.edu.unipam.tcc.flow.StudentPerformanceFlowHandler;
@@ -29,6 +30,7 @@ import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.ChatFlowOrchestratorImpl;
 import br.edu.unipam.tcc.session.ChatSessionState;
 import br.edu.unipam.tcc.session.ChatSessionStore;
+import br.edu.unipam.tcc.util.OptionShuffler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +52,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -90,6 +93,8 @@ class ChatFlowOrchestratorImplTest {
     // 02:30 UTC do dia 18 equivale a 23:30 do dia 17 em Brasília: prova que a data vem do fuso de São Paulo.
     @Spy private Clock clock = Clock.fixed(Instant.parse("2026-09-18T02:30:00Z"), ZoneId.of("America/Sao_Paulo"));
     @Mock private OutgoingMessagePublisher outgoingMessagePublisher;
+    // Embaralhador real com semente fixa: os testes conferem a regra, não um mock dela.
+    @Spy private OptionShuffler optionShuffler = new OptionShuffler(new Random(42));
 
     @InjectMocks private ChatFlowOrchestratorImpl orchestrator;
 
@@ -439,8 +444,7 @@ class ChatFlowOrchestratorImplTest {
         verify(adaptiveReviewService).processAnswer(eq(student), eq(flashcard), eq(true), any());
 
         String sent = lastSentMessage();
-        assertTrue(sent.contains("Resposta correta"));
-        assertTrue(sent.contains("4 dia(s)"));
+        assertTrue(sent.startsWith("✅ *Correto!*\n📅 Próximo reforço em *4 dias* (2^2)"), sent);
         assertTrue(sent.contains("É exatamente a conduta indicada."));
         assertFalse(sent.contains("Ajuste personalizado"));
         assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
@@ -500,8 +504,8 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("não sei"));
 
         String sent = lastSentMessage();
-        assertTrue(sent.contains("Intervalo recuado para *16 dia(s)*"));
-        assertFalse(sent.contains("Intervalo reiniciado"));
+        assertTrue(sent.contains("📅 Ciclo recuado, sem voltar ao zero: próximo reforço em *16 dias* (2^4)."), sent);
+        assertFalse(sent.contains("Ciclo reiniciado"));
         assertTrue(sent.contains("tratei isto como um lapso"));
         assertTrue(sent.contains("Reforço dirigido"));
         assertTrue(sent.contains("*2* questão(ões)"));
@@ -570,8 +574,8 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("massagem cardíaca"));
 
         String sent = lastSentMessage();
-        assertTrue(sent.contains("Resposta incorreta"));
-        assertTrue(sent.contains("Cardioversão elétrica sincronizada"));
+        assertTrue(sent.startsWith("❌ *Não foi dessa vez.*\n✔️ Correta: *Cardioversão elétrica sincronizada*\n"
+                + "📅 Ciclo reiniciado: próximo reforço em *1 dia* (2^0), para consolidar."), sent);
     }
 
     @Test
@@ -624,6 +628,264 @@ class ChatFlowOrchestratorImplTest {
 
         assertEquals(ChatState.REVIEW_MODE, session.getCurrentState());
         assertEquals(flashcard.getId(), session.getCurrentFlashcardId());
+    }
+
+    // =========================================================================
+    // Alternativas embaralhadas (D11) e formato da questão no WhatsApp (D12)
+    // =========================================================================
+
+    private static final List<String> MC_OPTIONS = List.of(
+            "A) Cardioversão elétrica sincronizada", "B) Amiodarona venosa",
+            "C) Adenosina em bolus", "D) Observação clínica");
+    // Ordem exibida [2, 0, 3, 1]: A=Adenosina, B=Cardioversão (correta), C=Observação, D=Amiodarona.
+    private static final List<Integer> SHOWN_ORDER = List.of(2, 0, 3, 1);
+    private static final String SHOWN_OPTIONS = "*A)* Adenosina em bolus\n*B)* Cardioversão elétrica sincronizada\n"
+            + "*C)* Observação clínica\n*D)* Amiodarona venosa";
+
+    private Flashcard multipleChoice(long id) {
+        Flashcard card = Flashcard.builder()
+                .subject(subject)
+                .topic("Cardiologia - Arritmias")
+                .questionType(QuestionType.MULTIPLE_CHOICE)
+                .question("Qual a primeira conduta na FA com instabilidade hemodinâmica?")
+                .answer("A")
+                .optionsJson("[\"A) Cardioversão elétrica sincronizada\", \"B) Amiodarona venosa\", "
+                        + "\"C) Adenosina em bolus\", \"D) Observação clínica\"]")
+                .explanation("Instabilidade hemodinâmica pede cardioversão elétrica sincronizada imediata.")
+                .active(true)
+                .build();
+        card.setId(id);
+        return card;
+    }
+
+    private RepetitionSchedule scheduleOf(Flashcard card, long id, Integer lastCorrectPosition) {
+        RepetitionSchedule schedule = RepetitionSchedule.builder()
+                .student(student).flashcard(card).status(ScheduleStatus.PENDING)
+                .lastCorrectPosition(lastCorrectPosition == null ? null : lastCorrectPosition.shortValue())
+                .build();
+        schedule.setId(id);
+        return schedule;
+    }
+
+    private ChatSessionState reviewingShownOrder(Flashcard card) {
+        ChatSessionState session = registeredSession(ChatState.REVIEW_MODE);
+        session.setCurrentFlashcardId(card.getId());
+        session.setCurrentOptionOrder(SHOWN_ORDER);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        when(flashcardRepository.findById(card.getId())).thenReturn(Optional.of(card));
+        return session;
+    }
+
+    private void stubAnswerOutcome(Flashcard card, boolean correct, int nIndex, int intervalDays, boolean lapse) {
+        RepetitionSchedule updated = RepetitionSchedule.builder()
+                .student(student).flashcard(card).nIndex(nIndex).intervalDays(intervalDays)
+                .status(ScheduleStatus.PENDING).build();
+        when(adaptiveReviewService.processAnswer(eq(student), any(Flashcard.class), eq(correct), any()))
+                .thenReturn(outcome(updated, TopicMastery.SEM_DADOS, 0.0, false, lapse, 0));
+    }
+
+    private void stubPending(RepetitionSchedule... schedules) {
+        when(repetitionScheduleRepository.findPendingReviewsByStudent(
+                eq(student.getId()), any(LocalDate.class), eq(ScheduleStatus.PENDING)))
+                .thenReturn(List.of(schedules));
+    }
+
+    @Test
+    @DisplayName("Deve apresentar a questão no formato novo, com contador e alternativas legíveis, nunca o JSON cru")
+    void shouldPresentQuestionInNewFormat() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        Flashcard card = multipleChoice(300L);
+        stubPending(scheduleOf(card, 30L, null), scheduleOf(multipleChoice(301L), 31L, null));
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("📚 *Revisão MMEEBB* · faltam *2* hoje\n🏷️ _Cardiologia - Arritmias_\n\n"
+                + "❓ Qual a primeira conduta na FA com instabilidade hemodinâmica?\n\n*A)* "), sent);
+        assertTrue(sent.endsWith("\n\n✍️ _Responda com a letra (ex.: *B*)._\n_Dúvida? Pergunte — não conta como erro._"), sent);
+        for (String letter : List.of("A", "B", "C", "D")) {
+            assertTrue(sent.contains("\n*" + letter + ")* "), sent);
+        }
+        assertFalse(sent.contains("[\""), sent);
+        assertFalse(sent.contains("Opções:"), sent);
+        assertFalse(sent.contains("%n"), sent);
+    }
+
+    @Test
+    @DisplayName("Ao apresentar, deve salvar a ordem na sessão e gravar no agendamento uma posição correta diferente da última")
+    void shouldSaveOrderAndRecordNewCorrectPosition() {
+        for (int last = 0; last < MC_OPTIONS.size(); last++) {
+            org.mockito.Mockito.clearInvocations(repetitionScheduleRepository, outgoingMessagePublisher);
+            ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+            when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+            when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+            Flashcard card = multipleChoice(300L);
+            stubPending(scheduleOf(card, 30L, last));
+
+            orchestrator.processIncomingMessage(message("1"));
+
+            List<Integer> order = session.getCurrentOptionOrder();
+            assertEquals(4, order.size());
+            int correctPosition = order.indexOf(0);
+            assertTrue(correctPosition != last, "a correta repetiu a posição " + last);
+            verify(repetitionScheduleRepository).updateLastCorrectPosition(30L, (short) correctPosition);
+            String letter = String.valueOf((char) ('A' + correctPosition));
+            assertTrue(lastSentMessage().contains("*" + letter + ")* Cardioversão elétrica sincronizada"));
+        }
+    }
+
+    @Test
+    @DisplayName("Depois de uma dúvida, deve reenviar a questão na mesma ordem, sem sortear nem gravar posição")
+    void shouldResendSameOrderAfterDoubt() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        when(flashcardRepository.findSubjectIdById(card.getId())).thenReturn(Optional.of(subject.getId()));
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.doubt());
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Pense na instabilidade.");
+        stubPending(scheduleOf(card, 30L, 1), scheduleOf(multipleChoice(301L), 31L, null));
+
+        orchestrator.processIncomingMessage(message("por que não é a adenosina?"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains(SHOWN_OPTIONS), sent);
+        assertTrue(sent.contains("faltam *2* hoje"), sent);
+        assertEquals(SHOWN_ORDER, session.getCurrentOptionOrder());
+        verify(repetitionScheduleRepository, never()).updateLastCorrectPosition(any(), any());
+    }
+
+    @Test
+    @DisplayName("O tutor deve receber alternativas e gabarito na ordem exibida ao aluno")
+    void tutorShouldReceiveDisplayedOptionsAndAnswer() {
+        Flashcard card = multipleChoice(300L);
+        reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.doubt());
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Explicação.");
+
+        orchestrator.processIncomingMessage(message("não entendi"));
+
+        ArgumentCaptor<TutorContextDto> context = ArgumentCaptor.forClass(TutorContextDto.class);
+        verify(aiTutorService).answer(context.capture(), eq("não entendi"));
+        TutorContextDto.ReviewQuestion review = context.getValue().reviewQuestion();
+        assertEquals("B", review.answer());
+        assertEquals(List.of("A) Adenosina em bolus", "B) Cardioversão elétrica sincronizada",
+                "C) Observação clínica", "D) Amiodarona venosa"), OptionShuffler.parseOptions(review.options()));
+    }
+
+    @Test
+    @DisplayName("Deve corrigir pela letra exibida e mandar ao MMEEBB a questão original")
+    void shouldGradeByDisplayedLetter() {
+        Flashcard card = multipleChoice(300L);
+        reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.accepted());
+        stubAnswerOutcome(card, true, 2, 4, false);
+        stubPending();
+
+        orchestrator.processIncomingMessage(message("B"));
+
+        ArgumentCaptor<Flashcard> graded = ArgumentCaptor.forClass(Flashcard.class);
+        verify(answerEvaluationService).evaluate(eq("B"), graded.capture());
+        assertEquals("B", graded.getValue().getAnswer());
+        assertEquals(List.of("A) Adenosina em bolus", "B) Cardioversão elétrica sincronizada",
+                "C) Observação clínica", "D) Amiodarona venosa"), OptionShuffler.parseOptions(graded.getValue().getOptionsJson()));
+
+        ArgumentCaptor<Flashcard> scheduled = ArgumentCaptor.forClass(Flashcard.class);
+        verify(adaptiveReviewService).processAnswer(eq(student), scheduled.capture(), eq(true), any());
+        assertEquals("A", scheduled.getValue().getAnswer());
+        assertEquals(card.getOptionsJson(), scheduled.getValue().getOptionsJson());
+    }
+
+    @Test
+    @DisplayName("Sessão antiga, sem a ordem salva, deve corrigir pela ordem original")
+    void oldSessionWithoutOrderGradesByOriginalOrder() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        session.setCurrentOptionOrder(null);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.accepted());
+        stubAnswerOutcome(card, true, 1, 2, false);
+        stubPending();
+
+        orchestrator.processIncomingMessage(message("A"));
+
+        ArgumentCaptor<Flashcard> graded = ArgumentCaptor.forClass(Flashcard.class);
+        verify(answerEvaluationService).evaluate(eq("A"), graded.capture());
+        assertEquals("A", graded.getValue().getAnswer());
+        assertEquals(MC_OPTIONS, OptionShuffler.parseOptions(graded.getValue().getOptionsJson()));
+        assertTrue(lastSentMessage().contains("✅ *Correto!* Alternativa *A*"));
+    }
+
+    @Test
+    @DisplayName("Acerto: letra exibida, próximo reforço em dias e a explicação como 'Por quê'")
+    void correctAnswerFeedbackFormat() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.accepted());
+        stubAnswerOutcome(card, true, 2, 4, false);
+        stubPending();
+
+        orchestrator.processIncomingMessage(message("b"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("✅ *Correto!* Alternativa *B*\n📅 Próximo reforço em *4 dias* (2^2)\n\n"), sent);
+        assertTrue(sent.contains("💡 *Por quê:* Instabilidade hemodinâmica pede cardioversão elétrica sincronizada imediata."), sent);
+        assertTrue(sent.contains("Todas as revisões de hoje foram concluídas"), sent);
+        assertNull(session.getCurrentOptionOrder());
+        assertFalse(sent.contains("%n"));
+    }
+
+    @Test
+    @DisplayName("Erro: letra marcada, correta com o texto, ciclo reiniciado, separador e a próxima questão")
+    void wrongAnswerFeedbackFormatAndNextQuestion() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.rejected());
+        stubAnswerOutcome(card, false, 0, 1, false);
+        Flashcard next = multipleChoice(301L);
+        stubPending(scheduleOf(next, 31L, null));
+
+        orchestrator.processIncomingMessage(message("C"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("❌ *Não foi dessa vez.* Você marcou *C*.\n"
+                + "✔️ Correta: *B)* Cardioversão elétrica sincronizada\n"
+                + "📅 Ciclo reiniciado: próximo reforço em *1 dia* (2^0), para consolidar.\n\n"), sent);
+        assertTrue(sent.contains("💡 *Por quê:* "), sent);
+        assertTrue(sent.contains("\n\n━━━━━━━━━━\n\n📚 *Revisão MMEEBB* · faltam *1* hoje"), sent);
+        assertEquals(next.getId(), session.getCurrentFlashcardId());
+        int nextPosition = session.getCurrentOptionOrder().indexOf(0);
+        verify(repetitionScheduleRepository).updateLastCorrectPosition(31L, (short) nextPosition);
+    }
+
+    @Test
+    @DisplayName("Erro em texto livre não deve inventar a letra marcada")
+    void wrongFreeTextAnswerDoesNotClaimALetter() {
+        Flashcard card = multipleChoice(300L);
+        reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.rejected());
+        stubAnswerOutcome(card, false, 0, 1, false);
+        stubPending();
+
+        orchestrator.processIncomingMessage(message("amiodarona"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("❌ *Não foi dessa vez.*\n✔️ Correta: *B)* Cardioversão elétrica sincronizada\n"), sent);
+        assertFalse(sent.contains("Você marcou"), sent);
+    }
+
+    @Test
+    @DisplayName("Sem revisões pendentes, não deve sortear ordem nem gravar posição")
+    void shouldNotShuffleWithoutPendingReviews() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        stubPending();
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        assertNull(session.getCurrentOptionOrder());
+        verify(repetitionScheduleRepository, never()).updateLastCorrectPosition(any(), any());
     }
 
     @Test

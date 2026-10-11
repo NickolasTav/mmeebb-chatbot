@@ -5,6 +5,8 @@ import br.edu.unipam.tcc.entity.Flashcard;
 import br.edu.unipam.tcc.entity.enums.QuestionType;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.service.AnswerEvaluationService;
+import br.edu.unipam.tcc.util.ChatInputUtils;
+import br.edu.unipam.tcc.util.OptionShuffler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.AiMessage;
@@ -15,10 +17,7 @@ import dev.langchain4j.model.output.Response;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.text.Normalizer;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Avaliação de respostas com correção semântica via Google Gemini.
@@ -48,9 +47,6 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
 
             Responda SOMENTE com um objeto JSON válido, sem markdown, em um dos dois formatos acima. O
             feedback deve ser direto e pedagógico, em português do Brasil, dirigido ao estudante.""";
-
-    private static final Pattern CHOICE_LETTER =
-            Pattern.compile("^(?:letra|opcao|alternativa)?\\s*([a-z])(?:\\s|$)");
 
     private final ChatLanguageModel chatLanguageModel;
     private final ObjectMapper objectMapper;
@@ -97,17 +93,18 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
         if (expectedLetter.length() != 1) {
             return true;
         }
-        return CHOICE_LETTER.matcher(normalize(student)).find();
+        return ChatInputUtils.choiceLetter(student).isPresent();
     }
 
     private AnswerEvaluationDto evaluateSemantically(String student, String expected, Flashcard flashcard) {
         try {
             String prompt = String.format("""
                     PERGUNTA: %s
-
+                    %s
                     GABARITO OFICIAL: %s
 
-                    RESPOSTA DO ESTUDANTE: %s""", flashcard.getQuestion(), expected, student);
+                    RESPOSTA DO ESTUDANTE: %s""",
+                    flashcard.getQuestion(), optionsBlock(flashcard), answerWithText(expected, flashcard), student);
 
             Response<AiMessage> response = chatLanguageModel.generate(List.of(
                     SystemMessage.from(SYSTEM_PROMPT),
@@ -154,15 +151,30 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
             return normalize(student).equals(expectedLetter);
         }
 
-        Matcher matcher = CHOICE_LETTER.matcher(normalize(student));
-        return matcher.find() && matcher.group(1).equals(expectedLetter);
+        return ChatInputUtils.choiceLetter(student)
+                .map(letter -> letter.equalsIgnoreCase(expectedLetter))
+                .orElse(false);
+    }
+
+    /**
+     * As alternativas chegam na ordem em que o estudante as viu (embaralhadas, D11). Sem elas o
+     * Gemini só via a letra do gabarito e não conseguia julgar quem respondeu com o texto da
+     * alternativa em vez da letra.
+     */
+    private String optionsBlock(Flashcard flashcard) {
+        List<String> options = OptionShuffler.parseOptions(flashcard.getOptionsJson());
+        return options.isEmpty() ? "" : "\nALTERNATIVAS:\n" + String.join("\n", options) + "\n";
+    }
+
+    private String answerWithText(String expected, Flashcard flashcard) {
+        String letter = expected.trim().toUpperCase();
+        return OptionShuffler.parseOptions(flashcard.getOptionsJson()).stream()
+                .filter(option -> option.trim().toUpperCase().startsWith(letter + ")"))
+                .findFirst()
+                .orElse(expected);
     }
 
     private String normalize(String value) {
-        return Normalizer.normalize(value, Normalizer.Form.NFD)
-                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
-                .toLowerCase()
-                .replaceAll("[^a-z0-9 ]", "")
-                .trim();
+        return ChatInputUtils.normalize(value);
     }
 }

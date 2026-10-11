@@ -10,6 +10,7 @@ import lombok.Setter;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -33,6 +34,13 @@ public class ChatSessionState implements Serializable {
     private Long selectedSubjectId;
     private Long currentFlashcardId;
 
+    /**
+     * Ordem em que as alternativas da questão ativa foram exibidas: para cada posição mostrada, o
+     * índice da alternativa original. A correção, o tutor e o reenvio depois de uma dúvida usam esta
+     * ordem. Nula em sessão antiga ou questão sem alternativas, e então vale a ordem original.
+     */
+    private List<Integer> currentOptionOrder;
+
     private String draftFullName;
     private String draftRa;
     private Long draftCourseId;
@@ -48,6 +56,7 @@ public class ChatSessionState implements Serializable {
 
     public void clearReviewContext() {
         this.currentFlashcardId = null;
+        this.currentOptionOrder = null;
     }
 
     public void clearOnboardingDraft() {

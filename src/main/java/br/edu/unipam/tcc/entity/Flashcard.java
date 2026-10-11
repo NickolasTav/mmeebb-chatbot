@@ -17,7 +17,7 @@ import java.time.LocalDateTime;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@Builder(toBuilder = true)
 @EqualsAndHashCode(of = "id")
 public class Flashcard {
 

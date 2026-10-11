@@ -31,6 +31,7 @@ import br.edu.unipam.tcc.service.IntentRouterService;
 import br.edu.unipam.tcc.service.StudentOnboardingService;
 import br.edu.unipam.tcc.session.ChatSessionState;
 import br.edu.unipam.tcc.session.ChatSessionStore;
+import br.edu.unipam.tcc.util.OptionShuffler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -45,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static br.edu.unipam.tcc.util.ChatInputUtils.MAX_ACADEMIC_PERIOD;
+import static br.edu.unipam.tcc.util.ChatInputUtils.choiceLetter;
 import static br.edu.unipam.tcc.util.ChatInputUtils.numberedList;
 import static br.edu.unipam.tcc.util.ChatInputUtils.parsePositiveInt;
 import static br.edu.unipam.tcc.util.ChatInputUtils.parseSelection;
@@ -85,6 +87,9 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             "/desempenho", "/stats"
     );
 
+    /** Separa o retorno da resposta da próxima questão na mesma mensagem. */
+    private static final String SEPARATOR = "━━━━━━━━━━";
+
     private final ChatSessionStore chatSessionStore;
     private final StudentRepository studentRepository;
     private final StudentCourseRepository studentCourseRepository;
@@ -102,6 +107,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final StudentPerformanceFlowHandler studentPerformanceFlowHandler;
     private final Clock clock;
     private final OutgoingMessagePublisher outgoingMessagePublisher;
+    private final OptionShuffler optionShuffler;
 
     @Override
     public void processIncomingMessage(UazapiWebhookDto webhookDto) {
@@ -429,11 +435,58 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             return;
         }
 
-        Flashcard first = pending.get(0).getFlashcard();
-        session.setCurrentFlashcardId(first.getId());
+        String question = presentQuestion(session, pending.get(0), pending.size());
         transitionTo(session, ChatState.REVIEW_MODE);
 
-        send(session, formatFlashcard(first));
+        send(session, question);
+    }
+
+    /**
+     * Sorteia a ordem das alternativas para esta apresentação (a correta nunca na mesma posição da
+     * última vez, D11), guarda a ordem na sessão e a posição correta no agendamento. A posição é
+     * gravada já na apresentação: se o aluno sair sem responder, a próxima vez ainda muda de letra.
+     * Quem chama salva a sessão.
+     */
+    private String presentQuestion(ChatSessionState session, RepetitionSchedule schedule, int remainingToday) {
+        Flashcard card = schedule.getFlashcard();
+        Short last = schedule.getLastCorrectPosition();
+        OptionShuffler.ShuffledOptions view = optionShuffler.shuffle(
+                OptionShuffler.parseOptions(card.getOptionsJson()), card.getAnswer(),
+                last == null ? null : last.intValue());
+
+        session.setCurrentFlashcardId(card.getId());
+        if (hasChoices(view)) {
+            session.setCurrentOptionOrder(view.order());
+            repetitionScheduleRepository.updateLastCorrectPosition(schedule.getId(), (short) view.correctPosition());
+        } else {
+            session.setCurrentOptionOrder(null);
+        }
+
+        return formatQuestion(card, view, remainingToday);
+    }
+
+    /** A questão como o aluno a está vendo: a ordem da sessão, ou a original se ela não existir. */
+    private OptionShuffler.ShuffledOptions displayedView(ChatSessionState session, Flashcard card) {
+        return optionShuffler.apply(OptionShuffler.parseOptions(card.getOptionsJson()), card.getAnswer(),
+                session.getCurrentOptionOrder());
+    }
+
+    /**
+     * Cópia não persistida do flashcard com o gabarito e as alternativas na ordem exibida. É o que a
+     * correção e o tutor recebem; o motor MMEEBB continua recebendo o flashcard original.
+     */
+    private Flashcard displayedCard(Flashcard card, OptionShuffler.ShuffledOptions view) {
+        if (!hasChoices(view)) {
+            return card;
+        }
+        return card.toBuilder()
+                .answer(view.correctLetter())
+                .optionsJson(view.optionsJson())
+                .build();
+    }
+
+    private boolean hasChoices(OptionShuffler.ShuffledOptions view) {
+        return view.correctPosition() >= 0;
     }
 
     private void handleReviewModeState(ChatSessionState session, String studentAnswer) {
@@ -453,10 +506,11 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         }
 
         Flashcard card = current.get();
-        AnswerEvaluationDto evaluation = answerEvaluationService.evaluate(studentAnswer, card);
+        OptionShuffler.ShuffledOptions view = displayedView(session, card);
+        AnswerEvaluationDto evaluation = answerEvaluationService.evaluate(studentAnswer, displayedCard(card, view));
 
         if (evaluation.isDoubt()) {
-            handleReviewDoubt(session, card, studentAnswer);
+            handleReviewDoubt(session, card, view, studentAnswer);
             return;
         }
 
@@ -466,16 +520,23 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
         StringBuilder feedback = new StringBuilder();
         if (evaluation.correct()) {
-            feedback.append("✅ *Resposta correta!*\n")
-                    .append("Próximo reforço em *").append(updated.getIntervalDays())
-                    .append(" dia(s)* — IRA 2^").append(updated.getNIndex()).append(".\n\n");
+            feedback.append("✅ *Correto!*");
+            if (hasChoices(view)) {
+                feedback.append(" Alternativa *").append(view.correctLetter()).append("*");
+            }
+            feedback.append("\n📅 Próximo reforço em *").append(days(updated.getIntervalDays()))
+                    .append("* (2^").append(updated.getNIndex()).append(")\n\n");
         } else {
-            feedback.append("❌ *Resposta incorreta.*\n")
-                    .append("Gabarito: *").append(card.getAnswer()).append("*\n")
+            feedback.append("❌ *Não foi dessa vez.*");
+            chosenLetter(studentAnswer, view)
+                    .ifPresent(letter -> feedback.append(" Você marcou *").append(letter).append("*."));
+            feedback.append("\n✔️ Correta: ").append(correctAnswerLine(card, view)).append("\n")
                     .append(outcome.lapseSoftened()
-                            ? "Intervalo recuado para *" + updated.getIntervalDays()
-                              + " dia(s)* (N=" + updated.getNIndex() + ").\n\n"
-                            : "Intervalo reiniciado para *1 dia* (N=0) para consolidação.\n\n");
+                            ? "📅 Ciclo recuado, sem voltar ao zero: próximo reforço em *"
+                              + days(updated.getIntervalDays()) + "* (2^" + updated.getNIndex() + ")."
+                            : "📅 Ciclo reiniciado: próximo reforço em *" + days(updated.getIntervalDays())
+                              + "* (2^" + updated.getNIndex() + "), para consolidar.")
+                    .append("\n\n");
         }
 
         feedback.append(adaptiveNote(outcome, card));
@@ -485,7 +546,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         }
 
         if (card.getExplanation() != null && !card.getExplanation().isBlank()) {
-            feedback.append("💡 *Explicação:* ").append(card.getExplanation()).append("\n\n");
+            feedback.append("💡 *Por quê:* ").append(card.getExplanation()).append("\n\n");
         }
 
         List<RepetitionSchedule> remaining = findPendingReviews(student.getId()).stream()
@@ -497,13 +558,37 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             transitionTo(session, ChatState.MAIN_MENU);
             feedback.append("🎉 *Todas as revisões de hoje foram concluídas!*\n\nDigite *menu* para voltar.");
         } else {
-            Flashcard next = remaining.get(0).getFlashcard();
-            session.setCurrentFlashcardId(next.getId());
+            String next = presentQuestion(session, remaining.get(0), remaining.size());
             chatSessionStore.save(session);
-            feedback.append("------------------------------------\n\n").append(formatFlashcard(next));
+            feedback.append(SEPARATOR).append("\n\n").append(next);
         }
 
         send(session, feedback.toString());
+    }
+
+    /**
+     * A letra só aparece no "Você marcou" quando a correção a leu da resposta e ela existe entre as
+     * alternativas exibidas; texto livre não ganha uma letra inventada.
+     */
+    private Optional<String> chosenLetter(String studentAnswer, OptionShuffler.ShuffledOptions view) {
+        if (!hasChoices(view)) {
+            return Optional.empty();
+        }
+        return choiceLetter(studentAnswer)
+                .filter(letter -> letter.charAt(0) - 'A' < view.options().size());
+    }
+
+    private String correctAnswerLine(Flashcard card, OptionShuffler.ShuffledOptions view) {
+        if (!hasChoices(view)) {
+            return "*" + card.getAnswer() + "*";
+        }
+        String option = view.correctOption();
+        int labelEnd = option.indexOf(')') + 1;
+        return "*" + option.substring(0, labelEnd) + "* " + option.substring(labelEnd).trim();
+    }
+
+    private static String days(int intervalDays) {
+        return intervalDays == 1 ? "1 dia" : intervalDays + " dias";
     }
 
     /**
@@ -511,27 +596,36 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
      * questão completa, inclusive o gabarito, com a regra de não entregá-lo (spec-09, RN-04), e a
      * mesma questão é reenviada sem tocar no agendamento MMEEBB.
      */
-    private void handleReviewDoubt(ChatSessionState session, Flashcard card, String doubtText) {
+    private void handleReviewDoubt(ChatSessionState session, Flashcard card, OptionShuffler.ShuffledOptions view,
+                                   String doubtText) {
         log.info("[Orchestrator] Dúvida em revisão de [{}] sobre o flashcard {}: \"{}\"",
                 session.getPhoneNumber(), card.getId(), doubtText);
 
+        // O tutor vê a questão como o aluno: alternativas e gabarito na ordem exibida, para que
+        // "por que não é a C?" fale da mesma alternativa C que está na tela dele.
+        Flashcard displayed = displayedCard(card, view);
         Long subjectId = flashcardRepository.findSubjectIdById(card.getId()).orElse(null);
         TutorContextDto.ReviewQuestion reviewQuestion = new TutorContextDto.ReviewQuestion(
-                card.getTopic(), card.getQuestion(), card.getOptionsJson(), card.getAnswer(), card.getExplanation());
+                card.getTopic(), card.getQuestion(), displayed.getOptionsJson(), displayed.getAnswer(),
+                card.getExplanation());
 
         String explanation = aiTutorService.answer(
                 buildTutorContext(session, findSubjectName(subjectId).orElse(null), reviewQuestion), doubtText);
+
+        // Reenvia na mesma ordem (sem sortear de novo): o aluno pode estar comparando com a mensagem anterior.
+        int remainingToday = Math.max(1, repetitionScheduleRepository.findPendingReviewsByStudent(
+                session.getStudentId(), LocalDate.now(clock), ScheduleStatus.PENDING).size());
 
         send(session, String.format("""
                 🧠 *Tirando sua dúvida sobre esta questão*
 
                 %s
 
-                ------------------------------------
+                %s
 
                 Quando estiver pronto, responda a questão abaixo novamente:
 
-                %s""", explanation, formatFlashcard(card)));
+                %s""", explanation, SEPARATOR, formatQuestion(card, view, remainingToday)));
     }
 
     /**
@@ -692,17 +786,29 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 _Digite o número, escreva o que precisa ou envie *sair* para encerrar._""";
     }
 
-    private String formatFlashcard(Flashcard card) {
+    /**
+     * Formato da questão no WhatsApp (D12): contador do dia, tópico, enunciado e uma alternativa por
+     * linha com a letra em negrito. O itálico do rodapé fecha em cada linha porque o WhatsApp não
+     * aplica um {@code _..._} que atravessa a quebra de linha.
+     */
+    private String formatQuestion(Flashcard card, OptionShuffler.ShuffledOptions view, int remainingToday) {
         StringBuilder sb = new StringBuilder();
-        sb.append("📚 *Revisão MMEEBB*\n");
-        sb.append("🏷️ *Tópico:* ").append(card.getTopic()).append("\n\n");
-        sb.append("❓ *Pergunta:* ").append(card.getQuestion()).append("\n\n");
+        sb.append("📚 *Revisão MMEEBB* · faltam *").append(remainingToday).append("* hoje\n");
+        sb.append("🏷️ _").append(card.getTopic()).append("_\n\n");
+        sb.append("❓ ").append(card.getQuestion()).append("\n\n");
 
-        if (card.getOptionsJson() != null && !card.getOptionsJson().isBlank()) {
-            sb.append("Opções:\n").append(card.getOptionsJson()).append("\n\n");
+        if (!view.options().isEmpty()) {
+            for (String option : view.options()) {
+                int labelEnd = option.indexOf(')') + 1;
+                sb.append("*").append(option, 0, labelEnd).append("* ")
+                        .append(option.substring(labelEnd).trim()).append("\n");
+            }
+            sb.append("\n✍️ _Responda com a letra (ex.: *B*)._\n");
+        } else {
+            sb.append("✍️ _Responda com suas palavras._\n");
         }
 
-        sb.append("_Envie sua resposta ou digite *menu* para pausar._");
+        sb.append("_Dúvida? Pergunte — não conta como erro._");
         return sb.toString();
     }
 

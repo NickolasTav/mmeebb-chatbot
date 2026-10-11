@@ -133,6 +133,31 @@ class AnswerEvaluationServiceImplTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("A correção semântica deve receber as alternativas e o gabarito com o texto, na ordem exibida")
+    void semanticPromptShouldCarryDisplayedOptionsAndAnswerText() {
+        // Visão exibida: a correta (Estatina) foi sorteada para a letra C.
+        Flashcard displayed = Flashcard.builder()
+                .questionType(QuestionType.MULTIPLE_CHOICE)
+                .question("Qual a classe de primeira escolha para reduzir o LDL?")
+                .answer("C")
+                .optionsJson("[\"A) Fibrato\", \"B) Niacina\", \"C) Estatina\", \"D) Ômega-3\"]")
+                .build();
+        stubGeminiResponse("{\"correct\": true, \"feedback\": \"Isso.\", \"isDoubt\": false}");
+
+        AnswerEvaluationDto result = service.evaluate("estatina", displayed);
+
+        org.mockito.ArgumentCaptor<java.util.List<dev.langchain4j.data.message.ChatMessage>> captor =
+                org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        Mockito.verify(chatLanguageModel).generate(captor.capture());
+        String prompt = ((dev.langchain4j.data.message.UserMessage) captor.getValue().get(1)).singleText();
+
+        assertTrue(result.correct());
+        assertTrue(prompt.contains("ALTERNATIVAS:\nA) Fibrato\nB) Niacina\nC) Estatina\nD) Ômega-3"), prompt);
+        assertTrue(prompt.contains("GABARITO OFICIAL: C) Estatina"), prompt);
+    }
+
+    @Test
     @DisplayName("Deve manter isDoubt falso quando o Gemini classifica como tentativa de resposta")
     void shouldKeepIsDoubtFalseWhenGeminiClassifiesAsAnswerAttempt() {
         Flashcard card = Flashcard.builder()

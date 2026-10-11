@@ -4,9 +4,11 @@ import br.edu.unipam.tcc.entity.RepetitionSchedule;
 import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.Collection;
@@ -37,6 +39,17 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
     Optional<RepetitionSchedule> findByStudentIdAndFlashcardId(UUID studentId, Long flashcardId);
 
     List<RepetitionSchedule> findByStudentId(UUID studentId);
+
+    /**
+     * Guarda a posição em que a alternativa correta foi exibida, no momento em que a questão é
+     * apresentada (vale mesmo se o aluno sair sem responder). É memória de exibição, não estado do
+     * MMEEBB: o UPDATE direto não incrementa a versão, então não compete com a gravação do ciclo
+     * feita depois pela resposta do aluno.
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE RepetitionSchedule s SET s.lastCorrectPosition = :position WHERE s.id = :id")
+    int updateLastCorrectPosition(@Param("id") Long id, @Param("position") Short position);
 
     long countByStudentIdAndNextReviewDateLessThanEqualAndStatus(
             UUID studentId,

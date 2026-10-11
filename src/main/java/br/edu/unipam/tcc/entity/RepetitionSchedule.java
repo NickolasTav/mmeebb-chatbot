@@ -61,6 +61,14 @@ public class RepetitionSchedule {
     @Column(nullable = false, length = 30)
     private ScheduleStatus status = ScheduleStatus.PENDING;
 
+    /**
+     * Posição (0 = A) em que a alternativa correta apareceu na última apresentação da questão a este
+     * aluno. A próxima apresentação sorteia outra posição (D11). Nula enquanto a questão não foi
+     * apresentada depois da V12.
+     */
+    @Column(name = "last_correct_position")
+    private Short lastCorrectPosition;
+
     @Version
     @Column(nullable = false)
     private Long version;

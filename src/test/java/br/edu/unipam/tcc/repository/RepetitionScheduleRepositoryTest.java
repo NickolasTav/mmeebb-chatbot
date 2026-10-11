@@ -26,6 +26,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Valida o filtro de matrícula ativa nas consultas de pendência contra um Postgres real com as
@@ -199,6 +200,75 @@ class RepetitionScheduleRepositoryTest {
                 .as("disciplina é lida para a métrica de domínio")
                 .isTrue();
         assertThat(encontrado.getFlashcard().getSubject().getName()).isEqualTo("Farmacologia IT");
+    }
+
+    // =========================================================================
+    // Última posição da alternativa correta (V12, alternativas embaralhadas)
+    // =========================================================================
+
+    @Test
+    @DisplayName("A V12 deve criar last_correct_position como smallint opcional")
+    void v12DeveCriarColunaDaUltimaPosicaoCorreta() {
+        Object[] column = (Object[]) entityManager.getEntityManager().createNativeQuery(
+                        "SELECT data_type, is_nullable FROM information_schema.columns "
+                                + "WHERE table_name = 'tb_repetition_schedule' AND column_name = 'last_correct_position'")
+                .getSingleResult();
+
+        assertThat(column[0]).isEqualTo("smallint");
+        assertThat(column[1]).isEqualTo("YES");
+    }
+
+    @Test
+    @DisplayName("Agendamento novo nasce sem posição: a questão ainda não foi apresentada")
+    void agendamentoNovoNasceSemPosicao() {
+        enroll(medicina, true);
+        Subject farmacologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_FARMACO").name("Farmacologia IT").build());
+        RepetitionSchedule agendado = scheduleFor(farmacologia, "Antibioticoterapia", TODAY);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(repetitionScheduleRepository.findById(agendado.getId()).orElseThrow().getLastCorrectPosition())
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("Deve gravar a posição exibida sem mexer no ciclo MMEEBB nem na versão do agendamento")
+    void deveGravarPosicaoSemMexerNoCicloNemNaVersao() {
+        enroll(medicina, true);
+        Subject farmacologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_FARMACO").name("Farmacologia IT").build());
+        RepetitionSchedule agendado = scheduleFor(farmacologia, "Antibioticoterapia", TODAY);
+        entityManager.flush();
+        Long versaoAntes = agendado.getVersion();
+        entityManager.clear();
+
+        int atualizados = repetitionScheduleRepository.updateLastCorrectPosition(agendado.getId(), (short) 3);
+        entityManager.clear();
+
+        RepetitionSchedule lido = repetitionScheduleRepository.findById(agendado.getId()).orElseThrow();
+        assertThat(atualizados).isEqualTo(1);
+        assertThat(lido.getLastCorrectPosition()).isEqualTo((short) 3);
+        assertThat(lido.getVersion()).isEqualTo(versaoAntes);
+        assertThat(lido.getNIndex()).isZero();
+        assertThat(lido.getIntervalDays()).isEqualTo(1);
+        assertThat(lido.getNextReviewDate()).isEqualTo(TODAY);
+    }
+
+    @Test
+    @DisplayName("A V12 deve recusar posição negativa")
+    void v12DeveRecusarPosicaoNegativa() {
+        enroll(medicina, true);
+        Subject farmacologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_FARMACO").name("Farmacologia IT").build());
+        RepetitionSchedule agendado = scheduleFor(farmacologia, "Antibioticoterapia", TODAY);
+        entityManager.flush();
+
+        assertThatThrownBy(() -> entityManager.getEntityManager()
+                .createNativeQuery("UPDATE tb_repetition_schedule SET last_correct_position = -1 WHERE id = :id")
+                .setParameter("id", agendado.getId())
+                .executeUpdate())
+                .hasMessageContaining("last_correct_position");
     }
 
     private RepetitionSchedule scheduleFor(Subject subject, String topic, LocalDate nextReviewDate) {

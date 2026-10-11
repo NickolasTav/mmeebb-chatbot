@@ -59,6 +59,13 @@ public class UazapiInstanceServiceImpl implements UazapiInstanceService {
     @Override
     @Transactional
     public UazapiQrCodeDto requestQrCode(UazapiConnectRequestDto request) {
+        String requestedPhone = request != null ? request.phone() : null;
+        String botPhone = normalizeBotPhone(requestedPhone);
+        if (requestedPhone != null && !requestedPhone.isBlank() && botPhone == null) {
+            return new UazapiQrCodeDto("ERROR", null, null, null, null,
+                    "Número do bot inválido. Use só DDI + DDD + número, com 10 a 15 dígitos (ex.: 5534999998888).");
+        }
+
         UazapiCredentials creds = persistAndResolve(request);
 
         if (creds.instance().isBlank() || !creds.hasApiKey()) {
@@ -69,15 +76,38 @@ public class UazapiInstanceServiceImpl implements UazapiInstanceService {
             creds = resolveCredentials();
         }
 
+        // Com o número, a Uazapi gera o código de pareamento em vez do QR Code (o número não é salvo:
+        // só serve para gerar o código).
+        Map<String, String> payload = botPhone != null ? Map.of("phone", botPhone) : Map.of();
         try {
-            JsonNode body = post(creds, "/instance/connect", Map.of());
-            return toQrCodeDto(creds.instance(), body, "QR Code gerado. Escaneie com o WhatsApp no seu celular.");
+            JsonNode body = post(creds, "/instance/connect", payload);
+            return toQrCodeDto(creds.instance(), body, botPhone != null
+                    ? "Código de pareamento gerado. No celular do bot: WhatsApp → Aparelhos conectados → " +
+                      "Conectar aparelho → Conectar com número de telefone, e digite o código."
+                    : "QR Code gerado. Escaneie com o WhatsApp no seu celular.");
         } catch (RestClientException e) {
-            log.warn("[UazapiInstanceService] Falha ao solicitar QR Code para [{}]: {}", creds.instance(), e.getMessage());
+            log.warn("[UazapiInstanceService] Falha ao solicitar {} para [{}]: {}",
+                    botPhone != null ? "código de pareamento" : "QR Code", creds.instance(), e.getMessage());
             return new UazapiQrCodeDto("ERROR", creds.instance(), null, null, null,
-                    "Não foi possível obter o QR Code. No servidor demo gratuito, a instância expira após 1h — " +
-                            "tente provisionar uma nova.");
+                    "Não foi possível obter o " + (botPhone != null ? "código de pareamento" : "QR Code") +
+                            ". No servidor demo gratuito, a instância expira após 1h — tente provisionar uma nova.");
         }
+    }
+
+    /**
+     * Só os dígitos do número do bot (DDI + DDD + número). Aceita o número digitado com +, espaços,
+     * hífens e parênteses; fora de 10 a 15 dígitos (E.164) devolve nulo.
+     */
+    private static String normalizeBotPhone(String phone) {
+        if (phone == null || phone.isBlank()) {
+            return null;
+        }
+        String trimmed = phone.trim();
+        if (!trimmed.matches("[+0-9 ()\\-]+")) {
+            return null;
+        }
+        String digits = trimmed.replaceAll("\\D", "");
+        return digits.length() >= 10 && digits.length() <= 15 ? digits : null;
     }
 
     @Override
@@ -215,7 +245,8 @@ public class UazapiInstanceServiceImpl implements UazapiInstanceService {
 
     private UazapiQrCodeDto toQrCodeDto(String instance, JsonNode body, String message) {
         String qrcode = firstText(body, "qrcode", "qrCode", "QRCode", "base64", "Base64", "instance.qrcode");
-        String pairingCode = firstText(body, "pairingCode", "paircode", "code");
+        String pairingCode = firstText(body, "pairingCode", "paircode", "code", "instance.paircode",
+                "instance.pairingCode");
         return new UazapiQrCodeDto("CONNECTING", instance, qrcode, pairingCode, 45, message);
     }
 

@@ -102,7 +102,7 @@ class UazapiSetupControllerTest {
     @Test
     @DisplayName("Deve retornar QR Code com sucesso via POST /api/v1/setup/instance/connect")
     void deveRetornarQrCodeComSucesso() throws Exception {
-        UazapiConnectRequestDto request = new UazapiConnectRequestDto("https://free.uazapi.com", "med-instance-01", "chave");
+        UazapiConnectRequestDto request = new UazapiConnectRequestDto("https://free.uazapi.com", "med-instance-01", "chave", null);
         UazapiQrCodeDto response = new UazapiQrCodeDto("CONNECTING", "med-instance-01",
                 "data:image/png;base64,iVBORw0KGgo=", "1234-5678", 45, "QR Code gerado.");
 
@@ -117,6 +117,23 @@ class UazapiSetupControllerTest {
                 .andExpect(jsonPath("$.qrcodeBase64").value("data:image/png;base64,iVBORw0KGgo="));
 
         verify(uazapiInstanceService, times(1)).requestQrCode(any(UazapiConnectRequestDto.class));
+    }
+
+    @Test
+    @DisplayName("POST /instance/connect com o número do bot repassa o phone e devolve o código de pareamento")
+    void deveRepassarNumeroDoBotEDevolverCodigoDePareamento() throws Exception {
+        UazapiQrCodeDto response = new UazapiQrCodeDto("CONNECTING", "med-instance-01",
+                null, "ABCD-1234", 45, "Código de pareamento gerado.");
+        when(uazapiInstanceService.requestQrCode(any(UazapiConnectRequestDto.class))).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/setup/instance/connect")
+                        .header("api_key", API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"phone\": \"5534999998888\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pairingCode").value("ABCD-1234"));
+
+        verify(uazapiInstanceService).requestQrCode(argThat(req -> "5534999998888".equals(req.phone())));
     }
 
     @Test

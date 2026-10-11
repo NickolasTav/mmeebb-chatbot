@@ -66,11 +66,89 @@ class UazapiInstanceServiceImplTest {
                         """, MediaType.APPLICATION_JSON));
 
         UazapiQrCodeDto result = uazapiInstanceService.requestQrCode(
-                new UazapiConnectRequestDto(BASE_URL, INSTANCE, API_KEY));
+                new UazapiConnectRequestDto(BASE_URL, INSTANCE, API_KEY, null));
 
         assertEquals("CONNECTING", result.status());
         assertEquals("data:image/png;base64,iVBORw0KGgo=", result.qrcodeBase64());
         assertEquals("1234-5678", result.pairingCode());
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("Sem número, /instance/connect recebe corpo vazio e devolve QR Code (comportamento original)")
+    void semNumeroDeveMandarCorpoVazioParaQrCode() {
+        when(configRepository.findByConfigKey(any())).thenReturn(java.util.Optional.empty());
+
+        mockServer.expect(requestTo(BASE_URL + "/instance/connect"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("{}", true))
+                .andRespond(withSuccess("""
+                        {"instance": {"qrcode": "data:image/png;base64,abc=", "paircode": ""}}
+                        """, MediaType.APPLICATION_JSON));
+
+        UazapiQrCodeDto result = uazapiInstanceService.requestQrCode(
+                new UazapiConnectRequestDto(BASE_URL, INSTANCE, API_KEY, null));
+
+        assertEquals("CONNECTING", result.status());
+        assertEquals("data:image/png;base64,abc=", result.qrcodeBase64());
+        assertNull(result.pairingCode());
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("Com o número do bot, /instance/connect recebe só os dígitos e devolve o código de pareamento")
+    void comNumeroDeveMandarPhoneEDevolverCodigoDePareamento() {
+        when(configRepository.findByConfigKey(any())).thenReturn(java.util.Optional.empty());
+
+        mockServer.expect(requestTo(BASE_URL + "/instance/connect"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("token", API_KEY))
+                .andExpect(content().json("{\"phone\": \"5534999998888\"}", true))
+                .andRespond(withSuccess("""
+                        {"connected": false, "instance": {"status": "connecting", "qrcode": "", "paircode": "ABCD-1234"}}
+                        """, MediaType.APPLICATION_JSON));
+
+        UazapiQrCodeDto result = uazapiInstanceService.requestQrCode(
+                new UazapiConnectRequestDto(BASE_URL, INSTANCE, API_KEY, "+55 (34) 99999-8888"));
+
+        assertEquals("CONNECTING", result.status());
+        assertEquals("ABCD-1234", result.pairingCode());
+        assertNull(result.qrcodeBase64());
+        assertTrue(result.message().contains("Conectar com número de telefone"),
+                "a mensagem deve dizer onde digitar o código no celular: " + result.message());
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("Número inválido não chama a Uazapi e explica o formato esperado")
+    void numeroInvalidoNaoChamaUazapi() {
+        for (String invalido : java.util.List.of("123", "abc", "55 34 9999", "5534999998888123456")) {
+            UazapiQrCodeDto result = uazapiInstanceService.requestQrCode(
+                    new UazapiConnectRequestDto(BASE_URL, INSTANCE, API_KEY, invalido));
+
+            assertEquals("ERROR", result.status(), "número: " + invalido);
+            assertNull(result.pairingCode());
+            assertTrue(result.message().contains("DDI"), "a mensagem deve explicar o formato: " + result.message());
+        }
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("O número do bot não é salvo nas configurações do sistema")
+    void numeroDoBotNaoESalvo() {
+        when(configRepository.findByConfigKey(any())).thenReturn(java.util.Optional.empty());
+
+        mockServer.expect(requestTo(BASE_URL + "/instance/connect"))
+                .andRespond(withSuccess("""
+                        {"paircode": "WXYZ-9876"}
+                        """, MediaType.APPLICATION_JSON));
+
+        UazapiQrCodeDto result = uazapiInstanceService.requestQrCode(
+                new UazapiConnectRequestDto(null, null, null, "5534999998888"));
+
+        assertEquals("WXYZ-9876", result.pairingCode());
+        verify(configRepository, org.mockito.Mockito.never()).save(argThat(c ->
+                c.getConfigValue() != null && c.getConfigValue().contains("5534999998888")));
         mockServer.verify();
     }
 
@@ -123,7 +201,7 @@ class UazapiInstanceServiceImplTest {
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
         UazapiQrCodeDto result = assertDoesNotThrow(() ->
-                uazapiInstanceService.requestQrCode(new UazapiConnectRequestDto(BASE_URL, INSTANCE, "chave-invalida")));
+                uazapiInstanceService.requestQrCode(new UazapiConnectRequestDto(BASE_URL, INSTANCE, "chave-invalida", null)));
 
         assertEquals("ERROR", result.status());
         assertNull(result.qrcodeBase64());

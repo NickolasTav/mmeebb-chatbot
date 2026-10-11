@@ -99,11 +99,12 @@
         const baseUrl = document.getElementById("input-base-url").value.trim();
         const instance = document.getElementById("input-instance").value.trim();
         const apiKey = document.getElementById("input-api-key").value.trim();
+        const phone = document.getElementById("input-bot-phone").value.trim();
 
         try {
             const qr = await api("/instance/connect", {
                 method: "POST",
-                body: JSON.stringify({ baseUrl: baseUrl, instance: instance, apiKey: apiKey || null })
+                body: JSON.stringify({ baseUrl: baseUrl, instance: instance, apiKey: apiKey || null, phone: phone || null })
             });
             renderQrCode(qr);
             startStatusPolling();
@@ -115,7 +116,16 @@
 
     function renderQrCode(qr) {
         const container = document.getElementById("qrcode-container");
-        if (qr && qr.qrcodeBase64) {
+        const pairHelp = document.getElementById("paircode-help");
+        pairHelp.classList.add("hidden");
+        if (qr && qr.pairingCode) {
+            const code = document.createElement("span");
+            code.className = "text-3xl font-mono font-bold tracking-widest text-slate-900";
+            code.textContent = qr.pairingCode;
+            container.replaceChildren(code);
+            pairHelp.classList.remove("hidden");
+            startQrCountdown(qr.expiresInSeconds || 45);
+        } else if (qr && qr.qrcodeBase64) {
             const src = qr.qrcodeBase64.startsWith("data:")
                 ? qr.qrcodeBase64
                 : "data:image/png;base64," + qr.qrcodeBase64;

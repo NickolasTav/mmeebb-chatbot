@@ -5,11 +5,11 @@
 
 [![Java CI with Maven](https://img.shields.io/badge/Java-17%2B-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![Spring Boot 3](https://img.shields.io/badge/Spring%20Boot-3.3.x-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
-[![PostgreSQL & pgvector](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3%20Management-FF6600?style=for-the-badge&logo=rabbitmq&logoColor=white)](https://www.rabbitmq.com/)
 [![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.5%20Flash--Lite%20%2B%20Failover-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![LangChain4j](https://img.shields.io/badge/LangChain4j-0.35.0-1C3C3C?style=for-the-badge)](https://github.com/langchain4j/langchain4j)
-[![Tests](https://img.shields.io/badge/Tests-100%25%20Passing-brightgreen?style=for-the-badge&logo=junit5&logoColor=white)](https://junit.org/junit5/)
+[![Tests](https://img.shields.io/badge/Tests-561%20Passing-brightgreen?style=for-the-badge&logo=junit5&logoColor=white)](https://junit.org/junit5/)
 
 ---
 
@@ -36,7 +36,10 @@
 - [9. Integração com WhatsApp (Uazapi & Ngrok)](#9-integração-com-whatsapp-uazapi--ngrok)
 - [10. Suíte de Testes (TDD)](#10-suíte-de-testes-tdd)
 - [11. Estrutura do Código](#11-estrutura-do-código)
-- [12. Governança Git & Commits Semânticos](#12-governança-git--commits-semânticos)
+- [12. Banco de Questões](#12-banco-de-questões)
+- [13. QA, Carga e Anti-Banimento](#13-qa-carga-e-anti-banimento)
+- [14. Decisões de Projeto](#14-decisões-de-projeto)
+- [15. Governança Git & Commits Semânticos](#15-governança-git--commits-semânticos)
 
 ---
 
@@ -186,7 +189,7 @@ flowchart TB
         ORCH -->|4. Relatório de Desempenho| PERF[StudentPerformanceFlowHandler]
         
         SCHED[DailyReviewNotificationScheduler] -->|Rodada 5min: horário de cada aluno| Q_OUT[whatsapp.outgoing.queue]
-        Q_OUT -->|Rate Limit + Anti-Ban + Composing| OUT_CONS[WhatsappOutgoingConsumer]
+        Q_OUT -->|Anti-Ban: jitter + composing<br/>modo global ou per-recipient| OUT_CONS[WhatsappOutgoingConsumer]
         
         OUT_CONS -->|POST /message/sendText| REST_CLI[UazapiClientService]
         CONS -->|POST /message/sendText| REST_CLI
@@ -219,15 +222,15 @@ O número de WhatsApp é a chave única do estudante. Quando um número desconhe
 | 2 de 3 | `AWAITING_RA` | RA — aceita `pular`, e recusa RA já vinculado a outro número |
 | 3 de 3 | `AWAITING_COURSE` → `AWAITING_ACADEMIC_PERIOD` | Curso e período letivo |
 
-Ao concluir, o sistema grava `tb_student` + `tb_student_course` e **inicializa os agendamentos MMEEBB** de todos os flashcards ativos do curso, deixando a primeira rodada disponível imediatamente. Números já cadastrados nunca repetem o formulário, mesmo após a sessão expirar no Redis.
+Ao concluir, o sistema grava `tb_student` + `tb_student_course` e **inicializa os agendamentos MMEEBB** de todas as questões ativas do curso, deixando a primeira rodada disponível imediatamente (ver nas [decisões de projeto](#14-decisões-de-projeto) o efeito de "300+ revisões vencidas no 1º dia"). Números já cadastrados nunca repetem o formulário, mesmo após a sessão expirar no Redis.
 
 #### Após o cadastro: menu fixo + texto livre
 
-O estudante pode usar os números do menu ou **escrever livremente**. Texto livre passa por um classificador de intenção (Gemini) que também extrai a disciplina citada e restringe a busca vetorial a ela:
+O estudante pode usar os números do menu ou **escrever livremente**. Texto livre passa por um classificador de intenção (Gemini) que também extrai a disciplina citada, usada como contexto da resposta do tutor:
 
 | Intenção | Gatilhos | Comportamento |
 | :--- | :--- | :--- |
-| **📚 START_REVIEW** | `1`, ou texto livre como *"quero estudar um pouco"* | Inicia o ciclo de flashcards pendentes do dia ($2^n$). |
+| **📚 START_REVIEW** | `1`, ou texto livre como *"quero estudar um pouco"* | Inicia a revisão das questões pendentes do dia ($2^n$), com o contador "faltam N hoje". |
 | **💡 ASK_DOUBT** | `2`, ou qualquer pergunta de conteúdo | Responde pelo tutor de IA com o perfil do aluno (curso, período, disciplina citada em *"dúvida de cardiologia"*) e as últimas 6 trocas da conversa (30 min). Não há base de conhecimento: a IA responde livremente, com diretrizes de segurança no prompt. |
 | **⚙️ OPEN_SETTINGS** | `3`, `configurações`, `config`, `ajustes`, ou *"quero mudar meu horário"* | Abre o menu de Configurações (nome de tratamento, horário do lembrete, pausar lembretes, curso e período). |
 | **📊 SHOW_PERFORMANCE** | `4`, `desempenho`, `progresso`, `estatísticas`, `como estou`, ou *"será que estou melhorando?"* | Envia o relatório de desempenho: taxa de acerto, tópicos em que mais erra (com o teto de intervalo ativo em cada um), conteúdos consolidados e a leitura do preceptor virtual. |
@@ -236,11 +239,30 @@ O estudante pode usar os números do menu ou **escrever livremente**. Texto livr
 
 > Durante o formulário de cadastro os comandos globais ficam desativados: `menu` ali é uma resposta possível do estudante, não um comando de reset.
 
-#### Correção das respostas
+#### Apresentação da questão e correção das respostas
 
-Múltipla escolha é resolvida por comparação direta e também aceita a letra da alternativa colada por extenso pelo aluno (`"A) Inibidor de SGLT2..."`); respostas dissertativas passam por **correção semântica via Gemini**, que aceita o conceito correto expresso com palavras próprias e devolve um comentário pedagógico curto.
+O banco é de **questões de múltipla escolha** (ver [seção 12](#12-banco-de-questões)). A cada apresentação as **alternativas são embaralhadas** e a **letra correta é sempre diferente da última vez que aquele aluno viu a questão** (a posição fica guardada no agendamento, `tb_repetition_schedule.last_correct_position`, migration V12). A ordem exibida vive na sessão (Redis) e vale para a correção, para o tutor e para o reenvio da questão depois de uma dúvida; o gabarito no banco não muda.
 
-O resultado dessa correção não é descartado: ele vira um evento em `tb_review_attempt` e alimenta a [personalização adaptativa](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo). Pedidos de ajuda (*"não entendi, pode explicar?"*) são detectados como dúvida, respondidos pelo tutor de IA — que recebe o gabarito, mas é proibido de revelá-lo — e **não contam como erro** — contabilizá-los puniria justamente quem pede explicação.
+Formato da questão no WhatsApp (nunca JSON cru):
+
+```text
+📚 *Revisão MMEEBB* · faltam *12* hoje
+🏷️ _Cardiologia - Insuficiência Cardíaca_
+
+❓ <enunciado>
+
+*A)* ...
+*B)* ...
+
+✍️ _Responda com a letra (ex.: *B*)._
+_Dúvida? Pergunte — não conta como erro._
+```
+
+O retorno mostra `✅ *Correto!* Alternativa *B*` ou `❌ *Não foi dessa vez.* Você marcou *A*.` com `✔️ Correta: *B)* <texto>`, a linha do próximo reforço (`📅 Próximo reforço em *4 dias* (2^2)`), a nota adaptativa quando houver, `💡 *Por quê:* <explicação>` e a próxima questão.
+
+Múltipla escolha é resolvida por comparação direta: a mensagem inteira precisa ser a letra (com ou sem "letra"/"alternativa" e parêntese) ou o texto de uma alternativa real colado por extenso (`"A) Inibidor de SGLT2..."`). Uma pergunta que apenas **começa** com uma palavra de uma letra ("é a C?", "o que é FEVE?") não é mais lida como resposta (correção do bug 2.7, PR #4); o que não é resposta clara segue para o Gemini, que distingue dúvida de resposta. Respostas abertas (questões antigas sem alternativas) passam por **correção semântica via Gemini**, que aceita o conceito correto com palavras próprias e devolve um comentário pedagógico curto.
+
+O resultado dessa correção não é descartado: ele vira um evento em `tb_review_attempt` e alimenta a [personalização adaptativa](#31-personalização-adaptativa-por-desempenho-mmeebb-adaptativo). Pedidos de ajuda (*"não entendi, pode explicar?"*) são detectados como dúvida, respondidos pelo tutor de IA — que recebe a questão com as alternativas na ordem exibida e o gabarito, mas é proibido de revelá-lo — e **não contam como erro** — contabilizá-los puniria justamente quem pede explicação.
 
 ### 4.2. Resiliência do Gemini (Retry & Failover Automático)
 
@@ -302,12 +324,13 @@ erDiagram
         bigint id PK
         bigint subject_id FK
         string topic
-        string question_type "FLASHCARD | MULTIPLE_CHOICE"
+        string question_type "MULTIPLE_CHOICE (FLASHCARD legado, inativo)"
         text question
         text answer
         jsonb options_json
         text explanation
         string difficulty "EASY | MEDIUM | HARD"
+        boolean active "false = fora das filas"
     }
     REPETITION_SCHEDULE {
         bigint id PK
@@ -318,6 +341,7 @@ erDiagram
         int repetition_count
         int consecutive_correct
         date next_review_date
+        smallint last_correct_position "0=A; ultima posicao da correta mostrada (V12)"
         string status "PENDING | COMPLETED"
         bigint version "Lock Otimista"
     }
@@ -359,7 +383,7 @@ erDiagram
 | **IA / LLM** | Google Gemini 3.5 Flash-Lite (fallback 3.5 Flash) + LangChain4j 0.35.0 | Tutor acadêmico com contexto do aluno, roteamento de intenção, correção semântica e diagnóstico de desempenho, com retry/failover automático em 503/429 |
 | **Gateway WhatsApp** | Uazapi / UazapiGO | Conexão com o WhatsApp, webhooks e envio de mensagens |
 | **Túnel Local** | Ngrok | Exposição segura da porta `8080` para recepção de eventos |
-| **Testes** | JUnit 5, Mockito, Spring Test | Metodologia TDD com 100% de cobertura de serviços |
+| **Testes** | JUnit 5, Mockito, Spring Test, Testcontainers | Metodologia TDD; 561 testes na suíte |
 
 ---
 
@@ -375,7 +399,7 @@ Na raiz do repositório, execute:
 ```powershell
 docker compose up -d
 ```
-> Isso iniciará o **PostgreSQL 16 com pgvector** na porta `5432`, o **RabbitMQ** nas portas `5672` (AMQP) e `15672` (Painel Web: [http://localhost:15672](http://localhost:15672)) e o **Redis 7** na porta `6379`, usado para o estado conversacional do chatbot.
+> Isso iniciará o **PostgreSQL 16** (imagem `pgvector/pgvector:pg16`, exigida pela migration V1 histórica; a extensão não é mais usada) na porta `5432`, o **RabbitMQ** nas portas `5672` (AMQP) e `15672` (Painel Web: [http://localhost:15672](http://localhost:15672)) e o **Redis 7** na porta `6379`, usado para o estado conversacional do chatbot.
 >
 > Se a porta `5432` já estiver ocupada por outro Postgres na sua máquina, defina `POSTGRES_HOST_PORT=5433` (ou outra porta livre) no `.env` **antes** de subir os containers — o `docker-compose.yml` lê essa variável (`${POSTGRES_HOST_PORT:-5432}:5432`) e ajuste `SPRING_DATASOURCE_URL` de acordo.
 
@@ -407,8 +431,10 @@ Em seguida, inicialize a aplicação:
 .\mvnw.cmd spring-boot:run
 ```
 
+> A lista completa de variáveis, com os padrões do código, está no [`.env.example`](.env.example) e na [seção 8](#8-variáveis-de-ambiente). **Atenção (achado A1):** a migration V6 grava `uazapi.base-url` em `system_configurations` e **o valor do banco vence o `.env`**; para trocar a URL da Uazapi num banco já migrado, use o painel `/setup` ou um `UPDATE` na tabela.
+
 > **💡 Dica de Custo/Performance com Google Gemini:**  
-> O modelo padrão configurado é o **`gemini-3.5-flash`** (ou `gemini-3.6-flash`), a geração mais moderna, econômica e de altíssima velocidade do Google. O mesmo modelo atende o tutor de dúvidas, o roteamento de intenção e a correção de respostas — não há modelo de embeddings nem base vetorial para manter.
+> O modelo padrão configurado é o **`gemini-3.5-flash-lite`**, com failover automático para o `gemini-3.5-flash`, geração econômica e de altíssima velocidade do Google. O mesmo modelo atende o tutor de dúvidas, o roteamento de intenção e a correção de respostas — não há modelo de embeddings nem base vetorial para manter.
 
 ### Passo 3: Acompanhar o desempenho do grupo piloto
 
@@ -438,7 +464,7 @@ Suba o túnel (o painel ainda não inicia o processo do Ngrok sozinho, só detec
 ngrok http 8080
 ```
 
-**Caminho recomendado a partir daqui — painel web automático:** acesse **`http://localhost:8080/setup`** com a aplicação rodando. Ele detecta o túnel Ngrok ativo automaticamente, provisiona uma instância na Uazapi se necessário (usando `UAZAPI_ADMIN_TOKEN`), gera e exibe o QR Code, faz o pareamento por polling e sincroniza o webhook sozinho assim que a instância conecta — zero passo manual além de rodar o `ngrok http 8080` e escanear o QR. Detalhes completos na seção 9.
+**Caminho recomendado a partir daqui — painel web automático:** acesse **`http://localhost:8080/setup`** com a aplicação rodando. Ele detecta o túnel Ngrok ativo automaticamente, provisiona uma instância na Uazapi se necessário (usando `UAZAPI_ADMIN_TOKEN`), gera e exibe o QR Code, faz o pareamento por polling e sincroniza o webhook sozinho assim que a instância conecta — zero passo manual além de rodar o `ngrok http 8080` e escanear o QR **ou** digitar o código de pareamento (campo "Número do bot", ver seção 9.1). Detalhes completos na seção 9.
 
 **Caminho 100% manual (fallback, sem o painel):** copie a URL pública HTTPS gerada pelo Ngrok (ex: `https://xxxx.ngrok-free.app`) e, no painel da Uazapi, configure:
 - **Webhook URL:** `https://xxxx.ngrok-free.app/webhook/uazapi`
@@ -447,6 +473,8 @@ ngrok http 8080
 ---
 
 ## 8. Variáveis de Ambiente
+
+O modelo completo e comentado está em [`.env.example`](.env.example). Resumo:
 
 | Variável | Valor Padrão | Descrição |
 | :--- | :--- | :--- |
@@ -472,14 +500,19 @@ ngrok http 8080
 | `MMEEBB_ADAPTIVE_REPORT_MIN_ATTEMPTS` | `5` | Respostas mínimas antes de exibir percentuais no relatório de desempenho |
 | `MMEEBB_TUTOR_HISTORY_MAX_TURNS` | `6` | Trocas (pergunta + resposta) que o tutor de IA lembra por aluno |
 | `MMEEBB_TUTOR_HISTORY_TTL_MINUTES` | `30` | Minutos sem conversa até o tutor esquecer o assunto |
-| `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi |
+| `UAZAPI_BASE_URL` | `https://free.uazapi.com` | URL base do gateway da Uazapi. **O valor salvo em `system_configurations` (semeado pela V6) vence esta variável** (achado A1) |
 | `UAZAPI_API_KEY` | *(Vazio)* | Token/Chave de autenticação da Uazapi |
 | `UAZAPI_INSTANCE` | *(Vazio)* | Nome da instância do WhatsApp conectada |
 | `UAZAPI_ADMIN_TOKEN` | *(Vazio)* | Admintoken da sua conta Uazapi (dashboard, **não** é a mesma coisa que `UAZAPI_API_KEY`) — habilita o botão "Provisionar Nova Instância" no painel `/setup` |
 | `UAZAPI_TYPING_DELAY_MS` | `2000` | Delay simulado de digitação (*composing*) |
+| `UAZAPI_INBOUND_CONCURRENCY` | `3-6` | Consumidores simultâneos da fila de entrada (faixa mínimo-máximo) |
+| `UAZAPI_ANTI_BAN_MODE` | `global` | Ritmo da fila de saída. `global` = estratégia original (um consumidor dorme jitter + composing de cada mensagem, alunos esperam uns pelos outros). `per-recipient` = cada aluno mantém o mesmo jitter + composing sem somar esperas entre alunos (ver [seção 13](#13-qa-carga-e-anti-banimento)). Valor desconhecido falha na subida |
+| `UAZAPI_ANTI_BAN_GLOBAL_MIN_INTERVAL_MS` | `1000` | Intervalo mínimo entre dois textos quaisquer no modo `per-recipient` (1000 ms = até ~60/min). Ignorado no modo `global` |
 | `GEMINI_API_KEY` | *(Vazio)* | Chave de API do Google AI Studio (Gemini) |
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash-lite` | Modelo de chat principal (failover automático para `gemini-3.5-flash` em picos de demanda) |
 | `GEMINI_TEMPERATURE` | `0.2` | Temperatura do modelo de chat (baixa, para respostas clínicas objetivas) |
+| `PORT` | `8080` | Porta HTTP da aplicação |
+| `GRAFANA_ADMIN_PASSWORD` | `admin` | Senha do Grafana no `docker-compose.yml` (opcional) |
 | `ADMIN_API_KEY` | `teste` | Chave de segurança para endpoints `/api/admin/**` **e `/api/v1/setup/**`** (painel de conectividade) |
 | `NGROK_CLIENT_API_URL` | `http://127.0.0.1:4040` | URL da API local de controle do Ngrok, usada pelo painel `/setup` para descobrir a URL pública do túnel |
 
@@ -494,7 +527,7 @@ Conectar o bot ao WhatsApp manualmente (abrir o Ngrok, copiar a URL, colar no pa
 Fluxo do painel:
 1. **Detecção do túnel**: consulta `GET http://127.0.0.1:4040/api/tunnels` (API local do Ngrok) para achar a URL pública ativa. Não inicia o processo do Ngrok sozinho — ele precisa estar rodando (`ngrok http 8080`).
 2. **Provisionamento automático de instância** (`POST /api/v1/setup/instance/provision`): se não houver instância/token salvos (ou quando você clicar em "Provisionar Nova Instância"), a aplicação chama `POST /instance/init` na Uazapi com o **admintoken** da sua conta (`UAZAPI_ADMIN_TOKEN`, **diferente** do token de instância), recebe um token novo e salva **instância + token na tabela `system_configurations`** — não fica hardcoded em `.env`, então sobrevive a reinícios da aplicação mesmo trocando de instância a cada expiração de 1h.
-3. **QR Code** (`POST /api/v1/setup/instance/connect`): chama `POST /instance/connect` com o token salvo, extrai `instance.qrcode` (já em `data:image/png;base64,...`) e exibe no painel com polling de status a cada 3s.
+3. **QR Code ou código de pareamento** (`POST /api/v1/setup/instance/connect`): chama `POST /instance/connect` com o token salvo. Sem número, extrai `instance.qrcode` (já em `data:image/png;base64,...`) e exibe o QR. **Com o número do bot** (campo "Número do bot" do painel, DDI + DDD, 10 a 15 dígitos; aceita `+`, espaços e hífens), envia `{"phone": "<dígitos>"}` e a Uazapi devolve um `paircode` de 8 caracteres (ex.: `ABCD-1234`), exibido em destaque; no celular do bot: *Aparelhos conectados → Conectar aparelho → Conectar com número de telefone*. Número inválido responde `ERROR` sem chamar a Uazapi, e o número não é salvo. O painel faz polling de status a cada 3s. Passo a passo do pareamento real em `docs/10-banco-questoes-qa-carga/PAREAMENTO_REAL.md` (local).
 4. **Webhook automático**: assim que o polling detecta a instância `connected`, a aplicação configura o webhook sozinha (`POST /webhook` com a URL do Ngrok + eventos `messages.upsert`/`messages`) — idempotente, não reconfigura se já estiver apontando pra URL certa.
 5. **Teste de fumaça**: botão dedicado dispara uma mensagem de teste real para o número informado.
 
@@ -505,7 +538,7 @@ A documentação oficial (`docs.uazapi.com`) é uma SPA em JavaScript sem conte�
 | Ação | Rota | Header | Observação |
 | :--- | :--- | :--- | :--- |
 | Criar instância | `POST /instance/init` | `admintoken` | Body `{"name": "..."}`. Resposta traz `token` (novo) no root e em `instance.token`. |
-| Conectar / obter QR | `POST /instance/connect` | `token` | **Sem** nome de instância na URL — o token sozinho identifica a instância. QR vem em `instance.qrcode`. |
+| Conectar / obter QR ou código | `POST /instance/connect` | `token` | **Sem** nome de instância na URL — o token sozinho identifica a instância. Sem corpo: QR em `instance.qrcode`. Com `{"phone": "<número>"}`: código em `paircode` (ou `instance.paircode`). |
 | Consultar status | `GET /instance/status` | `token` | Estado em `instance.status` (`connecting`/`connected`/`disconnected`). |
 | Configurar webhook | `POST /webhook` | `token` | Body `{"url", "events", "enabled"}`. |
 | Desconectar / apagar | `POST /instance/disconnect` / `DELETE /instance` | `token` | Disconnect mantém a instância; delete remove de vez. |
@@ -526,15 +559,17 @@ Para executar a suíte completa de testes:
 ```
 
 ### Resultados Atuais:
-- **Total de Testes Unitários:** 449
-- **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado)
-- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção semântica de respostas (inclusive por letra da alternativa), Tratamento de Intenção de Saída (*Exit Intent*), Tutor de IA com contexto e histórico (sem revelar gabarito em revisão), Consumidores RabbitMQ, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante** (apelido, horário individual do lembrete, pausa, troca de matrícula preservando progresso), **Painel de Conectividade Uazapi/Ngrok** (auto-descoberta de túnel, provisionamento de instância, QR Code, sincronização de webhook) e **Personalização Adaptativa** (classificação de domínio por tópico, teto de intervalo, lapso graduado, fila priorizada, reforço dirigido e relatório de desempenho).
+- **Total de Testes:** 561 (branch `feat/pareamento-por-codigo`)
+- **Taxa de Aprovação:** 100% (0 Falhas, 0 Erros, 1 Ignorado — `RedisChatSessionStoreTest`, que precisa de um Redis real)
+- **Cobertura:** Cálculo matemático $2^n$, FSM de Sessões no Redis, formulário de cadastro, roteamento por intenção, correção de respostas (letra, alternativa colada, semântica), **embaralhamento das alternativas** (letra correta sempre diferente da última) e novo formato da questão, Tratamento de Intenção de Saída (*Exit Intent*), Tutor de IA com contexto e histórico (sem revelar gabarito em revisão), Consumidores RabbitMQ e **anti-banimento por destinatário**, Notificações Ativas Push, Controladores Administrativos, **Configurações do Estudante**, **Painel de Conectividade Uazapi/Ngrok** (túnel, provisionamento, QR Code, **pareamento por código**, webhook), **Personalização Adaptativa** e o **banco de questões** (contagens, gabarito e duplicatas validados contra o Postgres real via migration).
+
+> A contagem de 561 vale para a linha `feat/pareamento-por-codigo` (PR #6). O PR #4 (`fix/achados-qa`) tem 545 testes porque parte de `feat/alternativas-embaralhadas` e não contém o anti-ban nem o pareamento.
 
 > **Teste-chave do algoritmo:** `MmeebbServiceImplTest` percorre $n = 0 \dots 13$, em acerto e em erro, comparando a versão adaptativa sem histórico contra a clássica. É a prova executável de que a personalização **não descaracteriza o MMEEBB** — a contribuição central do trabalho permanece verificável.
 
 > O teste `RedisChatSessionStoreTest` valida a ida e volta do estado por um Redis real e é **ignorado automaticamente** quando não há Redis acessível (porta `6399` por padrão, configurável via `REDIS_IT_PORT`), mantendo a suíte executável sem dependências externas.
 
-> Os testes `RepetitionScheduleRepositoryTest`, `ReviewAttemptRepositoryTest` e `KnowledgeBaseRemovalMigrationTest` sobem um **Postgres real (imagem pgvector, exigida pela V1 histórica) via Testcontainers** e aplicam as migrations Flyway para validar o filtro de matrícula ativa, as consultas do reforço dirigido, as agregações de desempenho e a remoção da antiga base vetorial (V9) — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, eles são ignorados automaticamente.
+> Os testes `RepetitionScheduleRepositoryTest`, `ReviewAttemptRepositoryTest`, `KnowledgeBaseRemovalMigrationTest`, `QuestionBankMigrationTest` e `SystemConfigurationRepositoryTest` sobem um **Postgres real (imagem `pgvector/pgvector:pg16`, exigida pela V1 histórica) via Testcontainers** e aplicam as migrations Flyway para validar o filtro de matrícula ativa, as consultas do reforço dirigido, as agregações de desempenho, a remoção da antiga base vetorial (V9) e o banco de questões (V10–V12) — o H2 não serve porque desconhece o tipo `jsonb` de `tb_flashcard`. Sem Docker disponível, eles são ignorados automaticamente; **confira `skipped=0` nos relatórios do surefire**, porque um "BUILD SUCCESS" não distingue teste executado de teste pulado.
 
 ---
 
@@ -554,7 +589,9 @@ c:\projeto-tcc
 │   ├── observability/   # Métricas de domínio (Micrometer) e correlação de logs
 │   ├── repository/      # Repositórios Spring Data JPA
 │   ├── scheduler/       # Rotinas de disparo diário de revisões (@Scheduled)
+│   ├── messaging/       # Anti-banimento da fila de saída (AntiBanMode, RecipientPacer, PerRecipientDispatcher)
 │   ├── session/         # FSM conversacional e histórico do tutor no Redis (ChatSessionStore, ConversationHistoryStore)
+│   ├── util/            # OptionShuffler (alternativas embaralhadas), ChatInputUtils
 │   └── service/         # Interfaces e Implementações de regras de negócio
 │       └── impl/        # ChatFlowOrchestrator, MmeebbService, AdaptiveReviewService,
 │                        # PerformanceAnalysisService, AiTutorService, IntentRouterService...
@@ -567,13 +604,101 @@ c:\projeto-tcc
 ├── docs/                # Especificações técnicas e manuais operacionais (local, não versionado)
 │   ├── uazapi/          # Referência completa da API Uazapi
 │   └── GUIA_NGROK_WEBHOOK.md
-├── docker-compose.yml   # PostgreSQL 16 (pgvector) + RabbitMQ Management + Redis
+├── docker-compose.yml   # PostgreSQL 16 (imagem pgvector, exigida pela V1) + RabbitMQ Management + Redis
 └── pom.xml              # Dependências Maven do projeto
 ```
 
 ---
 
-## 12. Governança Git & Commits Semânticos
+## 12. Banco de Questões
+
+O banco tem **637 questões ativas, todas de múltipla escolha** (4 ou 5 alternativas, uma correta, explicação curta do porquê). Foram semeadas pelas migrations V2/V3 (55 questões) e V10 (582 questões novas, geradas e validadas mecanicamente por um script e revisadas uma a uma quanto a gabarito, ambiguidade e diretriz desatualizada).
+
+| Curso | Ativas | Disciplinas (questões) |
+| :--- | :-: | :--- |
+| **Medicina** | 381 | Clínica Médica 107 · Cirurgia Geral 62 · Pediatria 60 · Ginecologia e Obstetrícia 60 · Medicina de Família e Comunidade 48 · Urgência e Emergência 22 · Saúde Mental 22 |
+| **Sistemas de Informação** | 256 | Engenharia de Software 44 · Bancos de Dados e Persistência 43 · Estruturas de Dados e Algoritmos 41 · Segurança da Informação 36 · Redes e Distribuídos 36 · Programação Orientada a Objetos 28 · Gerência de Projetos de Software 28 |
+| **Total** | **637** | Dificuldade — Medicina: 108 fáceis / 171 médias / 102 difíceis; SI: 77 / 117 / 62 |
+
+- **Regras de conteúdo:** questões originais (nada copiado de banco protegido); Medicina segundo diretrizes brasileiras vigentes (MS, SBC, SBD, FEBRASGO, SBP/PNI, ATLS/ACLS), com a referência no campo `source`; enunciado legível no celular; nenhuma letra concentra mais de 40% dos gabaritos de um curso; nenhuma explicação cita a letra da alternativa (ela muda a cada apresentação).
+- **Verificação executável:** `QuestionBankMigrationTest` (Testcontainers) sobe o Postgres, aplica V1..V12 do zero e confere contagens por curso e disciplina, gabarito presente nas alternativas, ausência de duplicatas, presença de fácil/média/difícil em cada disciplina e a distribuição das letras.
+- **Questões antigas (`FLASHCARD`):** as 19 questões abertas das seeds V2/V3 foram **desativadas** na V10 (decisão com a orientadora: só questões fechadas). O histórico fica; as filas e as contagens só consideram `flashcard.active`. A V11 tirou "pgvector" da descrição da disciplina `BD_PERSIST`; a V12 criou `last_correct_position` e corrigiu uma explicação que citava letra.
+- **Como cadastrar mais:** `POST /api/admin/flashcards` (com a `ADMIN_API_KEY`) ou uma nova migration Flyway (a próxima livre é a **V13**). Aluno **já cadastrado** só recebe questões novas pelo endpoint `POST /api/admin/students/by-phone/{tel}/seed-schedules` (ver decisões D10).
+
+---
+
+## 13. QA, Carga e Anti-Banimento
+
+### 13.1. Matriz de QA
+
+Uma matriz de **172 cenários em 17 áreas** (cadastro, menu, revisão, alternativas embaralhadas, adaptativo, tutor, configurações, relatório, lembrete, anti-banimento, mensagens duplicadas, sessão expirada, falhas do Gemini/Uazapi, concorrência, risco de 300+ revisões, questões novas para aluno antigo, banco) foi **executada de forma simulada**: a stack real (Postgres, RabbitMQ, Redis, a aplicação empacotada e o Gemini real) com um stub fazendo o papel da Uazapi/WhatsApp, em conversas completas de vários alunos, inclusive simultâneas.
+
+| Resultado | Cenários |
+| :--- | :-: |
+| ok | 145 |
+| achado (defeito ou limitação registrada) | 13 |
+| observado (comportamento documentado, sem correção) | 13 |
+| só no WhatsApp real (legibilidade, BAN-04) | 1 |
+| falhou | 0 |
+
+**Isto é validação simulada, não WhatsApp real:** o pareamento do número do bot ficou como pendência, com o passo a passo pronto. Itens a conferir no aparelho: renderização do negrito/itálico do novo formato, legibilidade de enunciados longos e das 15 questões com `*`, `_` ou `~` no texto.
+
+Defeitos que contradiziam regra documentada foram corrigidos no PR #4 (`fix/achados-qa`): o bug 2.7 (pergunta que começa com palavra de uma letra, como "é a C?", era corrigida como resposta), a fila de revisão que ignorava `flashcard.active` e o reforço dirigido que antecipava a própria questão errada (A10). O restante está nas [pendências](#14-decisões-de-projeto) abaixo.
+
+### 13.2. Teste de carga (latência com 1, 5 e 10 alunos simultâneos)
+
+Medido com a stack isolada, anti-banimento de produção (entrada 3–6 s, digitando 2 s, jitter 3–6 s e *composing* 1,5 s na saída), Gemini real e 3 repetições por cenário (432 amostras por rodada, 0 anomalias). **Gargalo:** o consumidor de saída é único e serializa todos os alunos — o 10º aluno simultâneo recebia a resposta em ~62 s, e a saída respondia por 84% da latência.
+
+**Anti-banimento por destinatário** (PR #5, rascunho, atrás de configuração): cada aluno mantém o mesmo jitter e *composing*, mas alunos diferentes deixam de somar esperas; um teto global (`UAZAPI_ANTI_BAN_GLOBAL_MIN_INTERVAL_MS`, padrão 1000 ms) impede rajadas. O padrão continua `UAZAPI_ANTI_BAN_MODE=global` (a estratégia original descrita no artigo); `per-recipient` é opt-in e **a decisão de ligá-lo em produção é do autor**.
+
+| p95 com 10 alunos simultâneos (s) | Antes (`global`) | Depois (`per-recipient`) |
+| :--- | :-: | :-: |
+| Primeiro contato / cadastro / menu / 1ª questão / resposta | 59,5 – 62,5 | **16,4 – 18,2** |
+| Dúvida ao tutor (Gemini ×2) | 65,4 | **36,1** (sobra é Gemini, não a fila) |
+| Posição de entrega do 10º aluno | 62,4 | 19,2 |
+
+Com 5 alunos o p95 passou de 31,8–37,3 s para 12,0–16,8 s; com 1 aluno nada muda. Com a saída destravada, o gargalo das dúvidas simultâneas passa a ser o Gemini (429/failover) e a fila de entrada. Relatório completo e roteiro de reprodução: `docs/10-banco-questoes-qa-carga/RELATORIO_CARGA.md` (local).
+
+---
+
+## 14. Decisões de Projeto
+
+### 14.1. Remoção da base de conhecimento (RAG)
+
+- **O que saiu:** pgvector, embeddings, ingestão de documentos (Tika), busca vetorial e a rota `/api/admin/rag/*`, que agora responde 404. Dúvidas vão direto ao Gemini com o perfil do aluno (curso, período, disciplina citada), a questão em revisão (com o gabarito confidencial) e as últimas trocas da conversa.
+- **Motivo:** o acervo era pequeno e só continha o gabarito das próprias questões, o que gerava "não encontrei referências" para dúvidas legítimas — atrito num produto cujo princípio é eliminar a fricção (Fogg, 2009).
+- **Troca consciente:** abre-se mão da **ancoragem em material oficial** (respostas rastreáveis a um documento) em favor da **cobertura** (o tutor responde a qualquer dúvida).
+- **Mitigação do risco de alucinação:** o prompt manda admitir incerteza, não inventar doses nem referências e confirmar condutas com o preceptor; em revisão, o tutor recebe o gabarito mas é proibido de revelá-lo. Esse risco precisa constar na discussão da monografia.
+- **Resíduo técnico:** a imagem do Postgres continua `pgvector/pgvector:pg16` porque a migration V1 (histórica, imutável) executa `CREATE EXTENSION vector`. A extensão não é usada.
+
+### 14.2. Comportamentos conhecidos, documentados e não alterados
+
+Mudanças aqui alterariam o MMEEBB descrito no artigo ou o ritmo de envio; ficam para decisão do autor com a orientadora.
+
+| Item | Comportamento | Por que não foi mexido |
+| :--- | :--- | :--- |
+| **D7** — avalanche no 1º dia | Aluno novo recebe **300+ revisões vencidas no 1º dia**: a semeadura agenda todas as questões do curso para hoje e não há limite diário (Medicina 381, SI 256). Medido: cadastro concluído semeia 381 agendamentos | Escalonar ou limitar por sessão muda o método. Decidir com a orientadora |
+| **D10** — questões novas só no cadastro | `ScheduleSeedingService` só roda no cadastro e na troca de curso; aluno antigo não recebe questões novas sozinho (usar `POST /api/admin/students/by-phone/{tel}/seed-schedules`, que é por disciplina e cria um "Estudante Teste" se o telefone não existir) | Semear no boot muda o comportamento nesta leva |
+| **D8** — estratégia anti-ban | `per-recipient` existe mas vem desligado | Está descrita no artigo; a troca é decisão do autor |
+| **A1** — URL da Uazapi no banco | A V6 semeia `uazapi.base-url` em `system_configurations` e **o banco vence o `.env`** | Era premissa errada do plano de testes. Bancos de QA/carga precisam esvaziar a chave antes do 1º webhook, senão a aplicação chama a Uazapi real |
+| **FAL-03** — Gemini fora na correção | Falha do Gemini na correção semântica é tratada como resposta incorreta (reinicia o ciclo) | É o fallback **documentado** na spec-06 (l. 118); decisão de projeto |
+
+### 14.3. Achados apenas documentados
+
+Sem regra escrita que exija mudança, ou ficam para a decisão do autor (detalhes na matriz de QA, local):
+
+- **DUP-06/07:** sem deduplicação por `messageId` — a mesma mensagem entregue duas vezes gera duas respostas; na revisão, a 2ª entrega corrige a *próxima* questão.
+- **FAL-08:** com todas as rotas de envio da Uazapi falhando, a mensagem é perdida (sem retry nem fila de mensagens mortas) e a sessão já avançou.
+- **FAL-11 / SES-06:** exceção no orquestrador (Postgres ou Redis fora) deixa o aluno sem resposta e sem nova tentativa.
+- **A11:** o tutor responde com `**negrito**` de Markdown em ~46% das respostas (o WhatsApp usa `*negrito*`).
+- **A12:** webhook com campo de tipo inesperado devolve 500 (a referência da Uazapi pede 200).
+- **A13:** cadastro simultâneo de dois alunos com o mesmo RA deixa o 2º preso sem resposta até a sessão expirar.
+- **A14:** palpite "é a X?" depois da correção do bug 2.7 fica a critério do Gemini (resposta ou dúvida).
+- **A7/A8/A9** (carga): o teto global vale para o horário planejado (variação de ~3% no intervalo medido); sob dúvidas simultâneas o gargalo passa a ser o Gemini; falha do Gemini no tutor vira aviso sem nova tentativa.
+
+---
+
+## 15. Governança Git & Commits Semânticos
 
 O repositório adota o padrão **Conventional Commits**:
 

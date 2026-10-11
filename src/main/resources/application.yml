@@ -98,6 +98,14 @@ uazapi:
   typing-delay-ms: ${UAZAPI_TYPING_DELAY_MS:2000}
   inbound:
     concurrency: ${UAZAPI_INBOUND_CONCURRENCY:3-6}
+  anti-ban:
+    # global (padrao, estrategia original): um consumidor de saida dorme jitter + composing de cada
+    # mensagem, entao alunos diferentes esperam uns pelos outros.
+    # per-recipient: cada aluno mantem o mesmo jitter + composing, sem somar esperas entre alunos;
+    # o unico acoplamento e o teto global abaixo entre dois textos quaisquer.
+    mode: ${UAZAPI_ANTI_BAN_MODE:global}
+    # Intervalo minimo entre dois envios de texto quaisquer no modo per-recipient (1000 ms = ate ~60/min).
+    global-min-interval-ms: ${UAZAPI_ANTI_BAN_GLOBAL_MIN_INTERVAL_MS:1000}
 
 ngrok:
   client-api-url: ${NGROK_CLIENT_API_URL:http://127.0.0.1:4040}

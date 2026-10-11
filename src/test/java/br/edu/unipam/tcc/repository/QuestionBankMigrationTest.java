@@ -163,6 +163,18 @@ class QuestionBankMigrationTest {
     }
 
     @Test
+    @DisplayName("Nenhuma questão ativa deve citar letra de alternativa, porque as alternativas são embaralhadas (V12)")
+    void shouldNotReferenceOptionLettersInActiveQuestions() {
+        List<String> citing = jdbcTemplate.queryForList(
+                "SELECT f.topic " + ACTIVE_QUESTIONS
+                        + " AND (f.question || ' ' || f.explanation || ' ' || COALESCE(f.options_json::text, ''))"
+                        + " ~ '([Aa]lternativa|[Ll]etra|[Oo]pção|[Oo]pcao)s?\\s+[A-E]\\y'",
+                String.class);
+
+        assertThat(citing).isEmpty();
+    }
+
+    @Test
     @DisplayName("Cada disciplina com questões deve misturar EASY, MEDIUM e HARD")
     void shouldMixDifficultiesInEverySubject() {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(

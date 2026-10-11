@@ -21,3 +21,14 @@ ALTER TABLE tb_repetition_schedule
 
 COMMENT ON COLUMN tb_repetition_schedule.last_correct_position IS
     'Posição (0 = A) da alternativa correta na última apresentação da questão ao aluno; nula se nunca apresentada após a V12.';
+
+-- A explicação da questão de colisão em tabela hash (V3) citava "A alternativa C". Com as
+-- alternativas embaralhadas a letra muda a cada apresentação, então a referência passa a ser
+-- pelo conteúdo. A V3 não pode ser editada.
+UPDATE tb_flashcard
+SET explanation = REPLACE(explanation,
+        'A alternativa C descreve o Endereçamento Aberto com Sondagem Linear.',
+        'Percorrer as posições seguintes até achar uma vazia é outra técnica: o Endereçamento Aberto com Sondagem Linear.'),
+    updated_at = CURRENT_TIMESTAMP
+WHERE topic = 'Tabelas Hash - Tratamento de Colisões'
+  AND explanation LIKE '%A alternativa C descreve o Endereçamento Aberto%';

@@ -95,6 +95,18 @@ class AnswerEvaluationServiceImplTest {
         assertFalse(service.evaluate("   ", multipleChoice("A")).correct());
     }
 
+    @ParameterizedTest
+    @DisplayName("Bug 2.7: pergunta que começa com palavra de uma letra vai ao Gemini e vira dúvida, não erro")
+    @ValueSource(strings = {"é a C?", "e se fosse a B?", "o que é FEVE?"})
+    void perguntaComPalavraDeUmaLetraDeveIrAoGeminiComoDuvida(String pergunta) {
+        stubGeminiResponse("{\"correct\": false, \"feedback\": null, \"isDoubt\": true}");
+
+        AnswerEvaluationDto result = service.evaluate(pergunta, multipleChoice("A"));
+
+        assertTrue(result.isDoubt(), "Deveria ser dúvida: \"" + pergunta + "\"");
+        Mockito.verify(chatLanguageModel).generate(anyList());
+    }
+
     @Test
     @DisplayName("Deve sinalizar dúvida em questão de múltipla escolha sem pontuar como errada")
     void shouldFlagDoubtOnMultipleChoiceWithoutScoring() {

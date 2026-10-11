@@ -14,8 +14,14 @@ public final class ChatInputUtils {
 
     public static final int MAX_ACADEMIC_PERIOD = 20;
 
-    private static final Pattern CHOICE_LETTER =
-            Pattern.compile("^(?:letra|opcao|alternativa)?\\s*([a-z])(?:\\s|$)");
+    /** A mensagem inteira é a letra, com ou sem "letra"/"opção"/"alternativa" e pontuação ("B", "b)", "letra c"). */
+    private static final Pattern ONLY_LETTER = Pattern.compile("^(?:(?:letra|opcao|alternativa)\\s*)?([a-z])$");
+
+    /** "letra B porque..." / "alternativa C, pois...": o prefixo deixa claro que é a escolha. */
+    private static final Pattern PREFIXED_LETTER = Pattern.compile("^(?:letra|opcao|alternativa)\\s+([a-z])(?:\\s|$)");
+
+    /** Alternativa colada como aparece na tela: "A) Estatina", "(D) Furosemida". */
+    private static final Pattern PASTED_OPTION = Pattern.compile("^\\s*\\(?([A-Za-z])\\)\\s*\\S");
 
     private ChatInputUtils() {
     }
@@ -45,13 +51,22 @@ public final class ChatInputUtils {
      * "alternativa C" ou a alternativa colada inteira ("A) Estatina"). Texto livre não tem letra.
      * É a mesma leitura usada na correção, então o "Você marcou X" do feedback diz exatamente a
      * letra que foi corrigida.
+     *
+     * <p>Frase que só começa com uma palavra de uma letra ("é a C?", "a resposta é B", "o que é FEVE?")
+     * não é escolha: segue para a avaliação semântica, que distingue dúvida de resposta (bug 2.7).
      */
     public static Optional<String> choiceLetter(String answer) {
         if (answer == null) {
             return Optional.empty();
         }
-        Matcher matcher = CHOICE_LETTER.matcher(normalize(answer));
-        return matcher.find() ? Optional.of(matcher.group(1).toUpperCase()) : Optional.empty();
+        String normalized = normalize(answer);
+        for (Matcher matcher : List.of(ONLY_LETTER.matcher(normalized), PREFIXED_LETTER.matcher(normalized),
+                PASTED_OPTION.matcher(answer))) {
+            if (matcher.find()) {
+                return Optional.of(matcher.group(1).toUpperCase());
+            }
+        }
+        return Optional.empty();
     }
 
     /** Minúsculas, sem acento e só com letras, dígitos e espaço. */

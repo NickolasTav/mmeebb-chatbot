@@ -40,10 +40,27 @@ class ChatInputUtilsTest {
             "Alternativa D | D",
             "opção a | A",
             "A) Estatina | A",
-            "  e  | E"
+            "  e  | E",
+            "B. | B",
+            "c? | C",
+            "(D) Furosemida | D",
+            "letra B porque é a mais segura | B"
     })
     void deveExtrairLetraEscolhida(String answer, String letter) {
         assertEquals(Optional.of(letter), ChatInputUtils.choiceLetter(answer));
+    }
+
+    /**
+     * Bug 2.7 (PENDENCIAS, spec-09 RN-04): frase que começa com uma palavra de uma letra é pergunta ou
+     * comentário, não a escolha de uma alternativa; vai para a avaliação semântica, que reconhece a dúvida.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "\"{0}\"")
+    @DisplayName("Frase com palavra de uma letra no início não é escolha de alternativa (bug 2.7)")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "é a C?", "é a C, né?", "e se fosse a B?", "a resposta é B", "o que é FEVE?", "A Estatina reduz o LDL"
+    })
+    void fraseComPalavraDeUmaLetraNaoEEscolha(String answer) {
+        assertEquals(Optional.empty(), ChatInputUtils.choiceLetter(answer));
     }
 
     @org.junit.jupiter.params.ParameterizedTest(name = "\"{0}\"")

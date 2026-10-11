@@ -111,6 +111,32 @@ class RepetitionScheduleRepositoryTest {
         assertThat(pendingCourseCodes()).containsExactly("IT_MED");
     }
 
+    /**
+     * D4: as 19 FLASHCARD foram desativadas na V10, mas quem já tinha o agendamento continuava recebendo a
+     * questão aberta na revisão, e o "faltam N" divergia do lembrete, que já filtrava (achado BAN-01/LEM-06).
+     */
+    @Test
+    @DisplayName("Questão desativada não entra na fila de revisão, igual às contagens")
+    void questaoDesativadaNaoEntraNaFila() {
+        enroll(medicina, true);
+        enroll(sistemas, false);
+        Subject subject = subjectRepository.findAll().stream()
+                .filter(s -> s.getCourse().getId().equals(medicina.getId())).findFirst().orElseThrow();
+        Flashcard inativa = flashcardRepository.save(Flashcard.builder().subject(subject).topic("Tópico")
+                .question("Questão aberta antiga?").answer("Resposta").active(false).build());
+        repetitionScheduleRepository.save(RepetitionSchedule.builder()
+                .student(student).flashcard(inativa).nextReviewDate(TODAY).build());
+
+        assertThat(repetitionScheduleRepository
+                .findPendingReviewsByStudent(student.getId(), TODAY, ScheduleStatus.PENDING))
+                .extracting(s -> s.getFlashcard().getId()).doesNotContain(inativa.getId()).hasSize(1);
+        assertThat(repetitionScheduleRepository
+                .findPendingReviewsByStudentAndSubject(student.getId(), subject.getId(), TODAY, ScheduleStatus.PENDING))
+                .extracting(s -> s.getFlashcard().getId()).doesNotContain(inativa.getId()).hasSize(1);
+        assertThat(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(student.getId(), TODAY)).isEqualTo(1);
+    }
+
     @Test
     @DisplayName("Não deve haver pendências quando o estudante não tiver matrícula ativa")
     void naoDeveTerPendenciasSemMatriculaAtiva() {

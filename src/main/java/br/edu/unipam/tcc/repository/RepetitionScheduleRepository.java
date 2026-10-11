@@ -86,12 +86,17 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
             @Param("currentDate") LocalDate currentDate
     );
 
+    /**
+     * Fila de revisão do dia. Questão desativada não é apresentada (D4), igual às contagens do lembrete e do
+     * "faltam N": sem o filtro, quem já tinha agendamento das FLASHCARD desativadas na V10 ainda as recebia.
+     */
     @Query("SELECT s FROM RepetitionSchedule s " +
            "JOIN FETCH s.flashcard f " +
            "JOIN FETCH f.subject sub " +
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status = :status " +
+           "AND f.active = true " +
            ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")
     List<RepetitionSchedule> findPendingReviewsByStudent(
@@ -107,6 +112,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "AND sub.id = :subjectId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status = :status " +
+           "AND f.active = true " +
            ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")
     List<RepetitionSchedule> findPendingReviewsByStudentAndSubject(

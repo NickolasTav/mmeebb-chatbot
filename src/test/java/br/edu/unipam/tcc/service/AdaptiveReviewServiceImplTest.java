@@ -214,6 +214,30 @@ class AdaptiveReviewServiceImplTest {
         verify(mmeebbMetrics).recordAdaptiveReinforcement(2);
     }
 
+    /**
+     * O erro grava o próprio agendamento para amanhã antes do reforço; a busca de "futuros do tópico" o
+     * encontrava e o devolvia para hoje, ocupando uma vaga do reforço e contradizendo o "próximo reforço em
+     * 1 dia" da mensagem (achado A10 do QA, ADA-06). O reforço só antecipa OUTROS cartões (RN-11).
+     */
+    @Test
+    @DisplayName("O reforço dirigido não antecipa a própria questão que acabou de ser errada")
+    void reforcoNaoDeveAnteciparAPropriaQuestaoErrada() {
+        givenMastery(TopicMastery.FRAGIL, 0.8);
+        givenSchedule(2);
+        when(repetitionScheduleRepository.countDueSchedulesByTopic(student.getId(), FARMACO, TOPICO, HOJE))
+                .thenReturn(0L);
+        when(repetitionScheduleRepository.findFutureSchedulesByTopic(student.getId(), FARMACO, TOPICO, HOJE))
+                .thenReturn(List.of(futuro(500L, HOJE.plusDays(1)), futuro(601L, HOJE.plusDays(4))));
+
+        AdaptiveReviewOutcomeDto resultado = service.processAnswer(student, flashcard, false, RESPONDIDO_EM);
+
+        assertThat(resultado.reinforcedCards()).isEqualTo(1);
+        assertThat(resultado.schedule().getNextReviewDate()).isEqualTo(HOJE.plusDays(1));
+        ArgumentCaptor<List<RepetitionSchedule>> captor = ArgumentCaptor.forClass(List.class);
+        verify(repetitionScheduleRepository).saveAll(captor.capture());
+        assertThat(captor.getValue()).extracting(RepetitionSchedule::getId).containsExactly(601L);
+    }
+
     @Test
     @DisplayName("Não deve antecipar reforço quando o tópico já tem cartões vencidos suficientes")
     void naoDeveAnteciparQuandoJaHaCartoesVencidos() {

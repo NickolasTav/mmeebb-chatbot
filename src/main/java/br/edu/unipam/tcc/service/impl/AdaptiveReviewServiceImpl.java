@@ -65,7 +65,7 @@ public class AdaptiveReviewServiceImpl implements AdaptiveReviewService {
         boolean intervalCapped = wasIntervalCapped(correct, nIndexBefore, updated.getNIndex());
         boolean lapseSoftened = !correct && updated.getNIndex() > 0;
         int reinforcedCards = reinforceWeakTopic(student.getId(), subjectId, flashcard.getTopic(),
-                correct, performance.mastery(), today);
+                correct, performance.mastery(), today, updated.getId());
 
         mmeebbMetrics.recordAdaptiveDecision(performance.mastery().name(),
                 decisionLabel(intervalCapped, lapseSoftened));
@@ -140,8 +140,13 @@ public class AdaptiveReviewServiceImpl implements AdaptiveReviewService {
      * antecipa apenas o que falta para o teto configurado, então errar várias vezes seguidas não
      * transforma a sessão em uma fila infinita.
      */
+    /**
+     * Antecipa OUTROS cartões do tópico (RN-11). O agendamento que acabou de ser respondido já foi gravado
+     * para amanhã e apareceria entre os "futuros": sem excluí-lo, a questão errada voltava no mesmo dia,
+     * contra o "próximo reforço em 1 dia" da mensagem, e ocupava uma vaga do reforço.
+     */
     private int reinforceWeakTopic(UUID studentId, Long subjectId, String topic,
-                                   boolean correct, TopicMastery mastery, LocalDate today) {
+                                   boolean correct, TopicMastery mastery, LocalDate today, Long answeredScheduleId) {
         int maxCards = adaptiveProperties.getReinforcementMaxCards();
         if (correct || mastery != TopicMastery.FRAGIL || subjectId == null || maxCards <= 0) {
             return 0;
@@ -155,6 +160,7 @@ public class AdaptiveReviewServiceImpl implements AdaptiveReviewService {
 
         List<RepetitionSchedule> anticipated = repetitionScheduleRepository
                 .findFutureSchedulesByTopic(studentId, subjectId, topic, today).stream()
+                .filter(schedule -> !schedule.getId().equals(answeredScheduleId))
                 .limit(slots)
                 .toList();
 

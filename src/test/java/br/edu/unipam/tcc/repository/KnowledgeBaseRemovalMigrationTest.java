@@ -16,7 +16,8 @@ import org.testcontainers.utility.DockerImageName;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Garante que a V9 removeu a base vetorial do RAG (spec-09) sem tocar nas tabelas do MMEEBB.
+ * Garante que a V9 removeu a base vetorial do RAG (spec-09) sem tocar nas tabelas do MMEEBB e que a
+ * V11 tirou o pgvector da descrição da disciplina de banco de dados (sobras do RAG).
  * A imagem continua sendo a do pgvector porque a V1 histórica cria a extensão {@code vector}.
  * Sem Docker disponível, a classe é ignorada.
  */
@@ -52,6 +53,16 @@ class KnowledgeBaseRemovalMigrationTest {
         assertThat(tableExists("tb_flashcard")).isTrue();
         assertThat(tableExists("tb_repetition_schedule")).isTrue();
         assertThat(tableExists("tb_review_attempt")).isTrue();
+    }
+
+    @Test
+    @DisplayName("A V11 deve tirar o pgvector da descrição da disciplina BD_PERSIST")
+    void shouldRemovePgvectorFromDatabaseSubjectDescription() {
+        String description = jdbcTemplate.queryForObject(
+                "SELECT description FROM tb_subject WHERE code = 'BD_PERSIST'", String.class);
+
+        assertThat(description).isNotBlank();
+        assertThat(description).doesNotContainIgnoringCase("pgvector");
     }
 
     private boolean tableExists(String table) {

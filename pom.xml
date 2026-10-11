@@ -12,7 +12,7 @@
 	<artifactId>med-mmeebb-chatbot</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>med-mmeebb-chatbot</name>
-	<description>Chatbot de Repetição Espaçada Dinâmico MMEEBB com RAG Multidisciplinar</description>
+	<description>Chatbot de Repetição Espaçada Dinâmico MMEEBB com Tutor de IA Contextual</description>
 
 	<properties>
 		<java.version>17</java.version>
@@ -62,17 +62,7 @@
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
 
-		<!-- LangChain4j & AI -->
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-spring-boot-starter</artifactId>
-			<version>${langchain4j.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j</artifactId>
-			<version>${langchain4j.version}</version>
-		</dependency>
+		<!-- LangChain4j & AI (só o cliente do Gemini; o langchain4j-core vem por ele) -->
 		<dependency>
 			<groupId>dev.langchain4j</groupId>
 			<artifactId>langchain4j-google-ai-gemini</artifactId>

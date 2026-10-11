@@ -29,7 +29,6 @@ O usuário solicitará a revisão de uma task ou diff (ex: *"Revise a implementa
 - [ ] Scripts SQL do Flyway seguem a nomenclatura `V{N}__{descricao}.sql` e são idempotentes/seguros?
 - [ ] Entidades JPA possuem índices adequados para chaves estrangeiras e buscas frequentes?
 - [ ] Não há risco de queries N+1 (uso de `JOIN FETCH`, `@EntityGraph` ou DTO projections)?
-- [ ] Colunas de vetores pgvector possuem dimensões corretas (`vector(1536)` ou `vector(768)`)?
 
 ### 3. Mensageria RabbitMQ & Webhooks
 - [ ] Controllers de webhook respondem `200 OK` imediatamente e delegam para RabbitMQ?

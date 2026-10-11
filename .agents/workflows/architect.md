@@ -14,7 +14,7 @@ O usuário fornecerá a descrição de uma funcionalidade, história de usuário
 
 1. **Leia o template de especificação** em `docs/templates/SPEC-TEMPLATE.md`.
 2. **Consulte a arquitetura e convenções do projeto**:
-   - Stack: Java 21, Spring Boot 3, PostgreSQL + pgvector, Flyway, RabbitMQ, UaiZap, Google Gemini.
+   - Stack: Java 17, Spring Boot 3, PostgreSQL 16, Flyway, Redis, RabbitMQ, Uazapi, Google Gemini (LangChain4j).
    - Padrão em camadas: `controller`, `service` e `service.impl`, `repository`, `entity`, `dto`, `consumer`, `scheduler`, `config`.
    - Governança: TDD (JUnit 5 + Mockito), Smoke Tests, Conventional Commits e rastreabilidade via MDC/TraceId.
 3. **Preencha todas as seções** do template com detalhes exaustivos:
@@ -26,7 +26,7 @@ O usuário fornecerá a descrição de uma funcionalidade, história de usuário
    - Estratégia de testes automatizados (Smoke Tests, Unitários, Integração).
    - Análise de riscos e mitigações (anti-ban, NPEs, timeouts, vazamento de conexões).
 4. **Substitua todos os placeholders** `{{...}}` por dados técnicos reais do projeto.
-5. **Salve a especificação** na subpasta do módulo correspondente em `docs/{{NN}}-{{modulo}}/` no formato `spec-{{NN}}-{{nome-da-funcionalidade}}.md` (ex: `docs/03-rag-langchain4j/spec-03-rag-langchain4j.md`).
+5. **Salve a especificação** na subpasta do módulo correspondente em `docs/{{NN}}-{{modulo}}/` no formato `spec-{{NN}}-{{nome-da-funcionalidade}}.md` (ex: `docs/09-ia-livre-contextual/spec-09-ia-livre-contextual.md`).
 
 ## Saída Esperada
 

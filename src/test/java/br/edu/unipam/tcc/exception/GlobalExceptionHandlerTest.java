@@ -8,11 +8,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 
@@ -118,5 +121,29 @@ class GlobalExceptionHandlerTest {
         assertEquals(500, response.getBody().status());
         assertEquals("Internal Server Error", response.getBody().error());
         assertEquals("Ocorreu um erro interno inesperado no servidor.", response.getBody().message());
+    }
+
+    @Test
+    @DisplayName("Deve tratar rota inexistente (ex.: favicon.ico) com HTTP 404, não 500")
+    void deveTratarNoResourceFoundComo404() {
+        NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "favicon.ico");
+
+        ResponseEntity<ApiErrorResponse> response = exceptionHandler.handleNoResourceFoundException(ex, request);
+
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertEquals(404, response.getBody().status());
+        assertEquals("Rota não encontrada.", response.getBody().message());
+    }
+
+    @Test
+    @DisplayName("Deve tratar GET em rota só-POST (ex.: / do webhook) com HTTP 405, não 500")
+    void deveTratarMetodoNaoSuportadoComo405() {
+        HttpRequestMethodNotSupportedException ex = new HttpRequestMethodNotSupportedException("GET", List.of("POST"));
+
+        ResponseEntity<ApiErrorResponse> response = exceptionHandler.handleMethodNotSupportedException(ex, request);
+
+        assertEquals(HttpStatus.METHOD_NOT_ALLOWED, response.getStatusCode());
+        assertEquals(405, response.getBody().status());
+        assertEquals("Method Not Allowed", response.getBody().error());
     }
 }

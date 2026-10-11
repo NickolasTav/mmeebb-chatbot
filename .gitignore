@@ -36,6 +36,7 @@ build/
 .env
 *.env
 *.log
+logs/
 
 ### Python ###
 __pycache__/

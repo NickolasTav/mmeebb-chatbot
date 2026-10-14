@@ -34,7 +34,8 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
             Primeiro decida se a mensagem do estudante é:
             (a) uma TENTATIVA DE RESPOSTA à pergunta, mesmo que incompleta, vaga ou com outras palavras; ou
             (b) um PEDIDO DE AJUDA/DÚVIDA sobre a questão (ex.: "não entendi", "pode explicar?", "por que não
-            é a B?", "não sei", "me dá uma dica").
+            é a B?", "não sei", "me dá uma dica"), incluindo perguntas sobre conceitos citados no enunciado
+            ou nas alternativas (ex.: "o que é espirometria?", "o que significa VEF1?").
 
             Se for pedido de ajuda/dúvida, responda exatamente:
             {"correct": false, "feedback": null, "isDoubt": true}
@@ -87,11 +88,16 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
      * Fast-path determinístico: só resolve localmente quando o gabarito é uma letra única
      * e o estudante respondeu com o padrão esperado (letra solta, "letra A", alternativa colada).
      * Qualquer outro texto (incluindo pedidos de ajuda) segue para a avaliação via Gemini.
+     * Mensagem com "?" também segue: "o que é espirometria?" começa com "o " e era lida como a
+     * letra O, virando erro sem o Gemini ter a chance de reconhecer a dúvida.
      */
     private boolean isChoiceLetterFastPath(String student, String expected) {
         String expectedLetter = normalize(expected);
         if (expectedLetter.length() != 1) {
             return true;
+        }
+        if (student.contains("?")) {
+            return false;
         }
         return ChatInputUtils.choiceLetter(student).isPresent();
     }

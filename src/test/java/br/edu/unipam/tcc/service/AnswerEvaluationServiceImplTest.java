@@ -172,4 +172,20 @@ class AnswerEvaluationServiceImplTest {
         assertFalse(result.isDoubt());
         assertFalse(result.correct());
     }
+
+    @ParameterizedTest
+    @DisplayName("Pergunta de conteúdo começando com palavra de uma letra não pode ser lida como alternativa")
+    @ValueSource(strings = {
+            "o que é espirometria?",
+            "a espirometria mede o quê?",
+            "e se o paciente não fumar?"
+    })
+    void shouldTreatQuestionStartingWithSingleLetterWordAsDoubt(String studentMessage) {
+        stubGeminiResponse("{\"correct\": false, \"feedback\": null, \"isDoubt\": true}");
+
+        AnswerEvaluationDto result = service.evaluate(studentMessage, multipleChoice("B"));
+
+        assertTrue(result.isDoubt(), "Deveria ser dúvida: \"" + studentMessage + "\"");
+        assertFalse(result.correct());
+    }
 }

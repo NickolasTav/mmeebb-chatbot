@@ -178,7 +178,10 @@ class AnswerEvaluationServiceImplTest {
     @ValueSource(strings = {
             "o que é espirometria?",
             "a espirometria mede o quê?",
-            "e se o paciente não fumar?"
+            "e se o paciente não fumar?",
+            "o que é espirometria",
+            "a espirometria mede o que",
+            "e o vef1"
     })
     void shouldTreatQuestionStartingWithSingleLetterWordAsDoubt(String studentMessage) {
         stubGeminiResponse("{\"correct\": false, \"feedback\": null, \"isDoubt\": true}");

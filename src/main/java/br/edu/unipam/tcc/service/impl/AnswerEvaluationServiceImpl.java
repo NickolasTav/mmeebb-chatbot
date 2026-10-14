@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Avaliação de respostas com correção semântica via Google Gemini.
@@ -48,6 +49,11 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
 
             Responda SOMENTE com um objeto JSON válido, sem markdown, em um dos dois formatos acima. O
             feedback deve ser direto e pedagógico, em português do Brasil, dirigido ao estudante.""";
+
+    /** Letra solta, com prefixo ("letra B", "alternativa b") ou alternativa colada ("B) ..."). */
+    private static final Pattern LETTER_ANSWER = Pattern.compile(
+            "^\\s*(?:(?:letra|op[cç][aã]o|alternativa)\\s+)?[a-z]\\s*(?:[).:-].*)?$",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.DOTALL);
 
     private final ChatLanguageModel chatLanguageModel;
     private final ObjectMapper objectMapper;
@@ -88,18 +94,15 @@ public class AnswerEvaluationServiceImpl implements AnswerEvaluationService {
      * Fast-path determinístico: só resolve localmente quando o gabarito é uma letra única
      * e o estudante respondeu com o padrão esperado (letra solta, "letra A", alternativa colada).
      * Qualquer outro texto (incluindo pedidos de ajuda) segue para a avaliação via Gemini.
-     * Mensagem com "?" também segue: "o que é espirometria?" começa com "o " e era lida como a
-     * letra O, virando erro sem o Gemini ter a chance de reconhecer a dúvida.
+     * A letra precisa vir sozinha ou seguida de delimitador ("B)", "B -"): "o que é espirometria"
+     * começa com "o " e era lida como a letra O, virando erro sem o Gemini reconhecer a dúvida.
      */
     private boolean isChoiceLetterFastPath(String student, String expected) {
         String expectedLetter = normalize(expected);
         if (expectedLetter.length() != 1) {
             return true;
         }
-        if (student.contains("?")) {
-            return false;
-        }
-        return ChatInputUtils.choiceLetter(student).isPresent();
+        return LETTER_ANSWER.matcher(student).matches();
     }
 
     private AnswerEvaluationDto evaluateSemantically(String student, String expected, Flashcard flashcard) {

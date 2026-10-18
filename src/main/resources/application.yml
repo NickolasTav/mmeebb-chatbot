@@ -143,6 +143,14 @@ mmeebb:
     reinforcement-max-cards: ${MMEEBB_ADAPTIVE_REINFORCEMENT_MAX_CARDS:2}
     # Tentativas minimas antes de exibir percentuais no relatorio de desempenho.
     report-min-attempts: ${MMEEBB_ADAPTIVE_REPORT_MIN_ATTEMPTS:5}
+  daily-limit:
+    # Questoes respondidas por dia quando o aluno nao escolheu um limite proprio.
+    default: ${MMEEBB_DAILY_LIMIT_DEFAULT:20}
+    # Faixa aceita no menu de Configuracoes.
+    min: ${MMEEBB_DAILY_LIMIT_MIN:5}
+    max: ${MMEEBB_DAILY_LIMIT_MAX:100}
+    # Parcela do limite reservada para questoes novas (0.25 = 5 de 20); 0 = revisoes ocupam tudo.
+    new-share: ${MMEEBB_DAILY_LIMIT_NEW_SHARE:0.25}
 
 
 

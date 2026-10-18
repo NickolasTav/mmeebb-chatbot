@@ -2,6 +2,7 @@ package br.edu.unipam.tcc.service.impl;
 
 import br.edu.unipam.tcc.dto.AdaptiveReviewOutcomeDto;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
+import br.edu.unipam.tcc.dto.DailyReviewPlanDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
 import br.edu.unipam.tcc.dto.TutorContextDto;
 import br.edu.unipam.tcc.dto.UazapiWebhookDto;
@@ -12,7 +13,6 @@ import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.entity.StudentCourse;
 import br.edu.unipam.tcc.entity.Subject;
 import br.edu.unipam.tcc.entity.enums.ChatState;
-import br.edu.unipam.tcc.entity.enums.ScheduleStatus;
 import br.edu.unipam.tcc.flow.StudentPerformanceFlowHandler;
 import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
@@ -27,6 +27,7 @@ import br.edu.unipam.tcc.service.AdaptiveReviewService;
 import br.edu.unipam.tcc.service.AiTutorService;
 import br.edu.unipam.tcc.service.AnswerEvaluationService;
 import br.edu.unipam.tcc.service.ChatFlowOrchestrator;
+import br.edu.unipam.tcc.service.DailyReviewQueueService;
 import br.edu.unipam.tcc.service.IntentRouterService;
 import br.edu.unipam.tcc.service.StudentOnboardingService;
 import br.edu.unipam.tcc.session.ChatSessionState;
@@ -37,7 +38,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -98,6 +98,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     private final FlashcardRepository flashcardRepository;
     private final RepetitionScheduleRepository repetitionScheduleRepository;
     private final AdaptiveReviewService adaptiveReviewService;
+    private final DailyReviewQueueService dailyReviewQueueService;
     private final AiTutorService aiTutorService;
     private final IntentRouterService intentRouterService;
     private final AnswerEvaluationService answerEvaluationService;
@@ -166,7 +167,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             case REVIEW_MODE -> handleReviewModeState(session, rawText);
             case DOUBT_MODE -> answerDoubt(session, rawText);
             case SETTINGS_MENU, SETTINGS_AWAITING_NAME, SETTINGS_AWAITING_TIME,
-                 SETTINGS_AWAITING_COURSE, SETTINGS_AWAITING_PERIOD ->
+                 SETTINGS_AWAITING_COURSE, SETTINGS_AWAITING_PERIOD, SETTINGS_AWAITING_DAILY_LIMIT ->
                     studentSettingsFlowHandler.handle(session, rawText);
         }
     }
@@ -324,20 +325,21 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
         session.clearOnboardingDraft();
         transitionTo(session, ChatState.MAIN_MENU);
 
-        long pending = countPendingReviews(student.getId());
+        DailyReviewPlanDto plan = dailyReviewQueueService.summarizeToday(student);
 
         send(session, String.format("""
                 🎉 *Cadastro concluído, %s!*
 
-                Preparei *%d* questão(ões) para sua primeira rodada de revisões.
+                📚 Seu banco tem *%d* questão(ões). Vou te enviar até *%d* por dia, e as de hoje já estão prontas.
 
-                ⏰ Seu lembrete diário chega às *%s*. Para mudar o horário ou como eu chamo você, envie *configurações*.
+                ⏰ Seu lembrete diário chega às *%s*. Para mudar o horário, como eu chamo você ou quantas questões recebe por dia, envie *configurações*.
 
                 %s
 
                 💬 _Você também pode escrever livremente: mande qualquer dúvida de conteúdo que eu te explico._""",
                 student.displayName(),
-                pending,
+                plan.dueTotal(),
+                plan.dailyLimit(),
                 student.getPreferredStudyTime().format(DateTimeFormatter.ofPattern("HH:mm")),
                 menuBody()));
     }
@@ -424,7 +426,14 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
     private void startReviewMode(ChatSessionState session) {
         Student student = loadStudent(session);
-        List<RepetitionSchedule> pending = findPendingReviews(student.getId());
+        DailyReviewPlanDto plan = dailyReviewQueueService.planToday(student);
+        List<RepetitionSchedule> pending = plan.queue();
+
+        if (plan.goalReached()) {
+            transitionTo(session, ChatState.MAIN_MENU);
+            send(session, dailyGoalReachedMessage(plan));
+            return;
+        }
 
         if (pending.isEmpty()) {
             transitionTo(session, ChatState.MAIN_MENU);
@@ -435,7 +444,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             return;
         }
 
-        String question = presentQuestion(session, pending.get(0), pending.size());
+        String question = presentQuestion(session, pending.get(0), pending);
         transitionTo(session, ChatState.REVIEW_MODE);
 
         send(session, question);
@@ -447,7 +456,8 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
      * gravada já na apresentação: se o aluno sair sem responder, a próxima vez ainda muda de letra.
      * Quem chama salva a sessão.
      */
-    private String presentQuestion(ChatSessionState session, RepetitionSchedule schedule, int remainingToday) {
+    private String presentQuestion(ChatSessionState session, RepetitionSchedule schedule,
+                                   List<RepetitionSchedule> todayQueue) {
         Flashcard card = schedule.getFlashcard();
         Short last = schedule.getLastCorrectPosition();
         OptionShuffler.ShuffledOptions view = optionShuffler.shuffle(
@@ -462,7 +472,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             session.setCurrentOptionOrder(null);
         }
 
-        return formatQuestion(card, view, remainingToday);
+        return formatQuestion(card, view, todayQueue);
     }
 
     /** A questão como o aluno a está vendo: a ordem da sessão, ou a original se ela não existir. */
@@ -549,16 +559,19 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
             feedback.append("💡 *Por quê:* ").append(card.getExplanation()).append("\n\n");
         }
 
-        List<RepetitionSchedule> remaining = findPendingReviews(student.getId()).stream()
+        DailyReviewPlanDto plan = dailyReviewQueueService.planToday(student);
+        List<RepetitionSchedule> remaining = plan.queue().stream()
                 .filter(s -> !s.getFlashcard().getId().equals(card.getId()))
                 .toList();
 
         if (remaining.isEmpty()) {
             session.clearReviewContext();
             transitionTo(session, ChatState.MAIN_MENU);
-            feedback.append("🎉 *Todas as revisões de hoje foram concluídas!*\n\nDigite *menu* para voltar.");
+            feedback.append(plan.beyondLimit() > 0
+                    ? dailyGoalReachedMessage(plan)
+                    : "🎉 *Todas as revisões de hoje foram concluídas!*\n\nDigite *menu* para voltar.");
         } else {
-            String next = presentQuestion(session, remaining.get(0), remaining.size());
+            String next = presentQuestion(session, remaining.get(0), remaining);
             chatSessionStore.save(session);
             feedback.append(SEPARATOR).append("\n\n").append(next);
         }
@@ -613,8 +626,8 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
                 buildTutorContext(session, findSubjectName(subjectId).orElse(null), reviewQuestion), doubtText);
 
         // Reenvia na mesma ordem (sem sortear de novo): o aluno pode estar comparando com a mensagem anterior.
-        int remainingToday = Math.max(1, repetitionScheduleRepository.findPendingReviewsByStudent(
-                session.getStudentId(), LocalDate.now(clock), ScheduleStatus.PENDING).size());
+        // A dúvida não gera tentativa, então o contador do dia continua o mesmo.
+        List<RepetitionSchedule> todayQueue = dailyReviewQueueService.planToday(loadStudent(session)).queue();
 
         send(session, String.format("""
                 🧠 *Tirando sua dúvida sobre esta questão*
@@ -625,7 +638,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 Quando estiver pronto, responda a questão abaixo novamente:
 
-                %s""", explanation, SEPARATOR, formatQuestion(card, view, remainingToday)));
+                %s""", explanation, SEPARATOR, formatQuestion(card, view, todayQueue)));
     }
 
     /**
@@ -659,18 +672,17 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
     }
 
     /**
-     * As revisões vencidas passam pela camada adaptativa antes de chegar ao aluno: os tópicos mais
-     * frágeis vêm primeiro, porque a sessão costuma ser interrompida antes do fim.
+     * A cota acabou com questões ainda vencidas. O texto não promete "o resto amanhã": amanhã chegam
+     * só as do limite, então o excedente é distribuído pelos próximos dias.
      */
-    private List<RepetitionSchedule> findPendingReviews(java.util.UUID studentId) {
-        List<RepetitionSchedule> pending = repetitionScheduleRepository.findPendingReviewsByStudent(
-                studentId, LocalDate.now(clock), ScheduleStatus.PENDING);
-        return adaptiveReviewService.prioritize(studentId, pending);
-    }
+    private String dailyGoalReachedMessage(DailyReviewPlanDto plan) {
+        return String.format("""
+                🎯 *Meta de hoje concluída!* Você respondeu *%d* questão(ões) hoje.
 
-    private long countPendingReviews(java.util.UUID studentId) {
-        return repetitionScheduleRepository
-                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(studentId, LocalDate.now(clock));
+                Ainda há *%d* na fila: elas chegam nos próximos dias, até *%d* por dia.
+
+                Digite *menu* para voltar.""",
+                plan.answeredToday(), plan.beyondLimit(), plan.dailyLimit());
     }
 
     // =========================================================================
@@ -780,7 +792,7 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
 
                 *1* - 📚 Revisar (método MMEEBB)
                 *2* - 💡 Tirar uma dúvida
-                *3* - ⚙️ Configurações _(nome, horário do lembrete, curso)_
+                *3* - ⚙️ Configurações _(nome, horário do lembrete, curso, questões por dia)_
                 *4* - 📊 Meu desempenho _(onde você mais erra e como ajusto suas revisões)_
 
                 _Digite o número, escreva o que precisa ou envie *sair* para encerrar._""";
@@ -790,10 +802,21 @@ public class ChatFlowOrchestratorImpl implements ChatFlowOrchestrator {
      * Formato da questão no WhatsApp (D12): contador do dia, tópico, enunciado e uma alternativa por
      * linha com a letra em negrito. O itálico do rodapé fecha em cada linha porque o WhatsApp não
      * aplica um {@code _..._} que atravessa a quebra de linha.
+     *
+     * <p>O contador sai da própria fila que o aluno vai receber (já cortada no limite diário), então
+     * "faltam N hoje (X revisões + Y novas)" sempre bate com as questões que de fato chegam.
      */
-    private String formatQuestion(Flashcard card, OptionShuffler.ShuffledOptions view, int remainingToday) {
+    private String formatQuestion(Flashcard card, OptionShuffler.ShuffledOptions view,
+                                  List<RepetitionSchedule> todayQueue) {
+        long reviews = todayQueue.stream().filter(schedule -> schedule.getLastReviewedAt() != null).count();
+        String breakdown = DailyReviewPlanDto.breakdown(reviews, todayQueue.size() - reviews);
+
         StringBuilder sb = new StringBuilder();
-        sb.append("📚 *Revisão MMEEBB* · faltam *").append(remainingToday).append("* hoje\n");
+        sb.append("📚 *Revisão MMEEBB* · faltam *").append(Math.max(1, todayQueue.size())).append("* hoje");
+        if (!todayQueue.isEmpty()) {
+            sb.append(" (").append(breakdown).append(")");
+        }
+        sb.append("\n");
         sb.append("🏷️ _").append(card.getTopic()).append("_\n\n");
         sb.append("❓ ").append(card.getQuestion()).append("\n\n");
 

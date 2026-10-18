@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.service;
 
+import br.edu.unipam.tcc.config.DailyLimitProperties;
 import br.edu.unipam.tcc.dto.StudentProfileDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.Student;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -61,7 +64,8 @@ class StudentSettingsServiceImplTest {
     void setUp() {
         Clock clock = Clock.fixed(LocalDateTime.of(TODAY, NOW).atZone(ZONE).toInstant(), ZONE);
         service = new StudentSettingsServiceImpl(
-                studentRepository, studentCourseRepository, courseRepository, scheduleSeedingService, clock);
+                studentRepository, studentCourseRepository, courseRepository, scheduleSeedingService,
+                new DailyLimitProperties(20, 5, 100, 0.25), clock);
 
         student = Student.builder()
                 .id(UUID.randomUUID())
@@ -301,5 +305,62 @@ class StudentSettingsServiceImplTest {
         verify(studentCourseRepository).save(saved.capture());
         assertEquals(5, saved.getValue().getAcademicPeriod());
         verify(scheduleSeedingService).seedMissingSchedules(student, medicina);
+    }
+
+    // ============================================================ questões por dia
+
+    @Test
+    @DisplayName("Perfil deve mostrar o limite padrão quando o aluno não escolheu nenhum")
+    void perfilDeveMostrarLimitePadrao() {
+        when(studentCourseRepository.findByStudentIdAndActiveTrue(student.getId())).thenReturn(List.of());
+
+        StudentProfileDto profile = service.getProfile(student.getId());
+
+        assertEquals(20, profile.dailyQuestionLimit());
+        assertTrue(profile.defaultDailyQuestionLimit());
+    }
+
+    @Test
+    @DisplayName("Perfil deve mostrar o limite escolhido pelo aluno")
+    void perfilDeveMostrarLimitePersonalizado() {
+        student.setDailyQuestionLimit(35);
+        when(studentCourseRepository.findByStudentIdAndActiveTrue(student.getId())).thenReturn(List.of());
+
+        StudentProfileDto profile = service.getProfile(student.getId());
+
+        assertEquals(35, profile.dailyQuestionLimit());
+        assertFalse(profile.defaultDailyQuestionLimit());
+    }
+
+    @Test
+    @DisplayName("Deve salvar o limite diário dentro da faixa e voltar ao padrão quando receber nulo")
+    void deveSalvarLimiteDiarioEVoltarAoPadrao() {
+        assertEquals(30, service.updateDailyQuestionLimit(student.getId(), 30));
+        assertEquals(30, student.getDailyQuestionLimit());
+
+        assertEquals(20, service.updateDailyQuestionLimit(student.getId(), null));
+        assertNull(student.getDailyQuestionLimit());
+
+        verify(studentRepository, times(2)).save(student);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {4, 101, 0})
+    @DisplayName("Deve recusar limite diário fora da faixa sem gravar nada")
+    void deveRecusarLimiteForaDaFaixa(int limit) {
+        student.setDailyQuestionLimit(25);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.updateDailyQuestionLimit(student.getId(), limit));
+
+        assertEquals(25, student.getDailyQuestionLimit());
+        verify(studentRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {5, 100})
+    @DisplayName("Deve aceitar os extremos da faixa do limite diário")
+    void deveAceitarExtremosDaFaixa(int limit) {
+        assertEquals(limit, service.updateDailyQuestionLimit(student.getId(), limit));
     }
 }

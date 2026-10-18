@@ -51,6 +51,10 @@ public class Student {
     @Column(name = "last_review_notification_on")
     private LocalDate lastReviewNotificationOn;
 
+    /** Nulo = segue o padrão global ({@code mmeebb.daily-limit.default}). */
+    @Column(name = "daily_question_limit")
+    private Integer dailyQuestionLimit;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

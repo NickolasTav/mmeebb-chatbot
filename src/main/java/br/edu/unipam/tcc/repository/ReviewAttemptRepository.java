@@ -66,4 +66,37 @@ public interface ReviewAttemptRepository extends JpaRepository<ReviewAttempt, Lo
 
     @Query("SELECT COUNT(DISTINCT a.student.id) FROM ReviewAttempt a WHERE a.answeredAt >= :since")
     long countDistinctStudents(@Param("since") LocalDateTime since);
+
+    /**
+     * Questões respondidas no intervalo {@code [from, to)} — com os limites do dia, é o que desconta
+     * do limite diário. Dúvida não gera tentativa, então nunca entra nesta conta.
+     */
+    @Query("SELECT COUNT(a) FROM ReviewAttempt a " +
+           "WHERE a.student.id = :studentId " +
+           "AND a.answeredAt >= :from " +
+           "AND a.answeredAt < :to")
+    long countAnsweredBetween(
+            @Param("studentId") UUID studentId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to
+    );
+
+    /**
+     * Quantas das respondidas no intervalo eram questões novas: a primeira tentativa do estudante
+     * naquela questão. É o que já foi gasto da reserva diária de novas, para a reserva não se
+     * desfazer à medida que o aluno avança pela fila.
+     */
+    @Query("SELECT COUNT(a) FROM ReviewAttempt a " +
+           "WHERE a.student.id = :studentId " +
+           "AND a.answeredAt >= :from " +
+           "AND a.answeredAt < :to " +
+           "AND NOT EXISTS (SELECT b.id FROM ReviewAttempt b " +
+           "  WHERE b.student.id = a.student.id " +
+           "  AND b.flashcard.id = a.flashcard.id " +
+           "  AND b.answeredAt < a.answeredAt)")
+    long countFirstAnswersBetween(
+            @Param("studentId") UUID studentId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to
+    );
 }

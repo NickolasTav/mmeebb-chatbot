@@ -1,10 +1,11 @@
 package br.edu.unipam.tcc.scheduler;
 
+import br.edu.unipam.tcc.dto.DailyReviewPlanDto;
 import br.edu.unipam.tcc.entity.Student;
 import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.CorrelationMdcHelper;
-import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
+import br.edu.unipam.tcc.service.DailyReviewQueueService;
 import io.micrometer.tracing.Tracer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -28,20 +29,20 @@ import java.util.List;
 public class DailyReviewNotificationScheduler {
 
     private final StudentRepository studentRepository;
-    private final RepetitionScheduleRepository repetitionScheduleRepository;
+    private final DailyReviewQueueService dailyReviewQueueService;
     private final OutgoingMessagePublisher outgoingMessagePublisher;
     private final Tracer tracer;
     private final Clock clock;
 
     public DailyReviewNotificationScheduler(
             StudentRepository studentRepository,
-            RepetitionScheduleRepository repetitionScheduleRepository,
+            DailyReviewQueueService dailyReviewQueueService,
             OutgoingMessagePublisher outgoingMessagePublisher,
             Tracer tracer,
             Clock clock
     ) {
         this.studentRepository = studentRepository;
-        this.repetitionScheduleRepository = repetitionScheduleRepository;
+        this.dailyReviewQueueService = dailyReviewQueueService;
         this.outgoingMessagePublisher = outgoingMessagePublisher;
         this.tracer = tracer;
         this.clock = clock;
@@ -71,19 +72,19 @@ public class DailyReviewNotificationScheduler {
             int[] sentInThisIteration = {0};
             CorrelationMdcHelper.runWithContext(student.getPhoneNumber(), "DAILY_SCHEDULER", () -> {
                 try {
-                    long pendingCount = repetitionScheduleRepository
-                            .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(student.getId(), today);
+                    // Só o que cabe no limite diário: quem já cumpriu a meta não é chamado de novo.
+                    DailyReviewPlanDto plan = dailyReviewQueueService.summarizeToday(student);
 
-                    if (pendingCount > 0) {
+                    if (plan.total() > 0) {
                         outgoingMessagePublisher.publish(
                                 student.getPhoneNumber(),
-                                buildNotificationMessage(student.displayName(), pendingCount));
+                                buildNotificationMessage(student.displayName(), plan));
 
                         sentInThisIteration[0] = 1;
-                        log.info("[ReviewScheduler] Lembrete enfileirado para [{}] ({} pendências)",
-                                student.getPhoneNumber(), pendingCount);
+                        log.info("[ReviewScheduler] Lembrete enfileirado para [{}] ({} questões: {})",
+                                student.getPhoneNumber(), plan.total(), plan.breakdown());
                     } else {
-                        log.debug("[ReviewScheduler] Nenhuma revisão pendente para o estudante [{}] hoje.",
+                        log.debug("[ReviewScheduler] Nada para o estudante [{}] hoje dentro do limite diário.",
                                 student.getPhoneNumber());
                     }
 
@@ -106,12 +107,12 @@ public class DailyReviewNotificationScheduler {
     /**
      * Monta a mensagem formatada para o WhatsApp com negrito, emojis e indicação clara de ação.
      */
-    private String buildNotificationMessage(String studentName, long pendingCount) {
+    private String buildNotificationMessage(String studentName, DailyReviewPlanDto plan) {
         return String.format(
                 "Olá, *%s*! 👋\n\n" +
-                "Você tem *%d* revisão(ões) pendente(s) do método MMEEBB para hoje no seu internato/curso.\n\n" +
+                "📚 *Revisão MMEEBB* · faltam *%d* hoje (%s) no seu internato/curso.\n\n" +
                 "Envie *revisar* para iniciar sua sessão de memorização espaçada! 🚀",
-                studentName, pendingCount
+                studentName, plan.total(), plan.breakdown()
         );
     }
 }

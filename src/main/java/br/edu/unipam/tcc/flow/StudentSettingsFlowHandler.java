@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.flow;
 
+import br.edu.unipam.tcc.config.DailyLimitProperties;
 import br.edu.unipam.tcc.dto.StudentProfileDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.enums.ChatState;
@@ -18,6 +19,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static br.edu.unipam.tcc.util.ChatInputUtils.MAX_ACADEMIC_PERIOD;
 import static br.edu.unipam.tcc.util.ChatInputUtils.numberedList;
@@ -38,6 +40,7 @@ public class StudentSettingsFlowHandler {
     private static final String BACK_COMMAND = "voltar";
     private static final String REMOVE_NAME_COMMAND = "remover";
     private static final String KEEP_COURSE_COMMAND = "manter";
+    private static final Set<String> DEFAULT_LIMIT_COMMANDS = Set.of("padrão", "padrao");
     private static final int MIN_NAME_LENGTH = 2;
     private static final int MAX_NAME_LENGTH = 30;
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
@@ -46,6 +49,7 @@ public class StudentSettingsFlowHandler {
     private final OutgoingMessagePublisher outgoingMessagePublisher;
     private final StudentSettingsService studentSettingsService;
     private final CourseRepository courseRepository;
+    private final DailyLimitProperties dailyLimitProperties;
 
     /**
      * Abre o menu de Configurações. Rascunhos de uma edição abandonada (por exemplo, o aluno saiu
@@ -71,6 +75,7 @@ public class StudentSettingsFlowHandler {
             case SETTINGS_AWAITING_TIME -> handleTimeInput(session, text);
             case SETTINGS_AWAITING_COURSE -> handleCourseInput(session, text);
             case SETTINGS_AWAITING_PERIOD -> handlePeriodInput(session, text);
+            case SETTINGS_AWAITING_DAILY_LIMIT -> handleDailyLimitInput(session, text);
             default -> throw new IllegalStateException(
                     "Estado fora do fluxo de configurações: " + session.getCurrentState());
         }
@@ -109,6 +114,7 @@ public class StudentSettingsFlowHandler {
                 send(session, confirmation + "\n\n" + settingsMenu(session));
             }
             case "4" -> startCourseChange(session);
+            case "5" -> startDailyLimitChange(session);
             default -> send(session, "⚠️ Opção inválida.\n\n" + settingsMenu(session));
         }
     }
@@ -250,6 +256,54 @@ public class StudentSettingsFlowHandler {
     }
 
     // =========================================================================
+    // Questões por dia
+    // =========================================================================
+
+    private void startDailyLimitChange(ChatSessionState session) {
+        StudentProfileDto profile = studentSettingsService.getProfile(session.getStudentId());
+
+        transitionTo(session, ChatState.SETTINGS_AWAITING_DAILY_LIMIT);
+        send(session, String.format("""
+                📊 *Quantas questões você quer receber por dia?*
+
+                Hoje: *%s*. Envie um número entre *%d* e *%d*.
+
+                _As revisões vencidas vêm primeiro, mas parte do limite fica sempre para questões novas._
+                _Envie *padrão* para voltar ao padrão (%d) ou *voltar* para cancelar._""",
+                dailyLimitLabel(profile),
+                dailyLimitProperties.getMin(),
+                dailyLimitProperties.getMax(),
+                dailyLimitProperties.getDefaultLimit()));
+    }
+
+    private void handleDailyLimitInput(ChatSessionState session, String text) {
+        if (DEFAULT_LIMIT_COMMANDS.contains(text.toLowerCase())) {
+            int limit = studentSettingsService.updateDailyQuestionLimit(session.getStudentId(), null);
+            backToMenu(session, "✅ Pronto! Voltei ao padrão de *" + limit + "* questões por dia.");
+            return;
+        }
+
+        Integer limit = parsePositiveInt(text);
+        if (limit == null || !dailyLimitProperties.accepts(limit)) {
+            send(session, String.format("""
+                    ⚠️ Envie apenas um número entre *%d* e *%d*.
+
+                    _Tente de novo, envie *padrão* para usar %d ou *voltar* para cancelar._""",
+                    dailyLimitProperties.getMin(),
+                    dailyLimitProperties.getMax(),
+                    dailyLimitProperties.getDefaultLimit()));
+            return;
+        }
+
+        studentSettingsService.updateDailyQuestionLimit(session.getStudentId(), limit);
+        backToMenu(session, "✅ Pronto! A partir de agora você recebe até *" + limit + "* questões por dia.");
+    }
+
+    private static String dailyLimitLabel(StudentProfileDto profile) {
+        return profile.dailyQuestionLimit() + (profile.defaultDailyQuestionLimit() ? " (padrão)" : "");
+    }
+
+    // =========================================================================
     // Auxiliares
     // =========================================================================
 
@@ -279,17 +333,20 @@ public class StudentSettingsFlowHandler {
                 🎓 *RA:* %s
                 📚 *Curso:* %s
                 ⏰ *Lembrete diário:* %s
+                📊 *Questões por dia:* %s
 
                 *1* - ✏️ Nome a ser chamado
                 *2* - ⏰ Horário do lembrete
                 *3* - %s
                 *4* - 🎓 Curso e período
+                *5* - 📊 Questões por dia
 
                 _Digite o número ou *menu* para voltar._""",
                 nameLine,
                 profile.ra() != null ? profile.ra() : "não informado",
                 courseLine,
                 reminderLine,
+                dailyLimitLabel(profile),
                 toggleOption);
     }
 

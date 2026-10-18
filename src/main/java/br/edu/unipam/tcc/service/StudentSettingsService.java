@@ -28,6 +28,13 @@ public interface StudentSettingsService {
     boolean toggleReviewNotifications(UUID studentId);
 
     /**
+     * @param dailyQuestionLimit limite dentro da faixa configurada, ou {@code null} para voltar ao padrão global
+     * @return o limite que passa a valer
+     * @throws IllegalArgumentException se o limite estiver fora da faixa aceita
+     */
+    int updateDailyQuestionLimit(UUID studentId, Integer dailyQuestionLimit);
+
+    /**
      * Troca (ou mantém) o curso e atualiza o período, preservando o progresso de cursos anteriores.
      *
      * @throws br.edu.unipam.tcc.exception.ResourceNotFoundException se o estudante não existir ou

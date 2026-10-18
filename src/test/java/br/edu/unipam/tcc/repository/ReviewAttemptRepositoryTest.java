@@ -208,6 +208,39 @@ class ReviewAttemptRepositoryTest {
                 });
     }
 
+    @Test
+    @DisplayName("Deve contar as respondidas do dia, da meia-noite inclusive à meia-noite seguinte exclusive")
+    void deveContarRespondidasNoDia() {
+        LocalDateTime inicioDoDia = AGORA.toLocalDate().atStartOfDay();
+        LocalDateTime inicioDoDiaSeguinte = inicioDoDia.plusDays(1);
+        registrar(maria, antibiotico, true, inicioDoDia);
+        registrar(maria, arritmia, false, AGORA);
+        registrar(maria, antibiotico, true, inicioDoDiaSeguinte.minusSeconds(1));
+        registrar(maria, arritmia, true, inicioDoDia.minusSeconds(1));   // ontem
+        registrar(maria, antibiotico, true, inicioDoDiaSeguinte);        // amanhã
+        registrar(outroAluno, arritmia, true, AGORA);                    // outro aluno
+
+        assertThat(reviewAttemptRepository.countAnsweredBetween(maria.getId(), inicioDoDia, inicioDoDiaSeguinte))
+                .isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("Deve contar como novas só as primeiras tentativas de cada questão, dentro do dia")
+    void deveContarPrimeirasTentativasNoDia() {
+        LocalDateTime inicioDoDia = AGORA.toLocalDate().atStartOfDay();
+        LocalDateTime inicioDoDiaSeguinte = inicioDoDia.plusDays(1);
+        registrar(maria, antibiotico, false, inicioDoDia.minusDays(1));  // antibiótico já visto ontem
+        registrar(maria, antibiotico, true, AGORA);                     // hoje: revisão
+        registrar(maria, arritmia, false, AGORA);                       // hoje: primeira vez (nova)
+        registrar(maria, arritmia, true, AGORA.plusHours(1));           // hoje: já não é nova
+        registrar(outroAluno, antibiotico, true, AGORA);                // outro aluno
+
+        assertThat(reviewAttemptRepository.countAnsweredBetween(maria.getId(), inicioDoDia, inicioDoDiaSeguinte))
+                .isEqualTo(3);
+        assertThat(reviewAttemptRepository.countFirstAnswersBetween(maria.getId(), inicioDoDia, inicioDoDiaSeguinte))
+                .isEqualTo(1);
+    }
+
     private void registrar(Student student, Flashcard flashcard, boolean correct, LocalDateTime answeredAt) {
         reviewAttemptRepository.save(ReviewAttempt.builder()
                 .student(student)

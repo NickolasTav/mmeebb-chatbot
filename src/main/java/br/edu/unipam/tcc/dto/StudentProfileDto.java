@@ -14,6 +14,8 @@ public record StudentProfileDto(
         String courseName,
         Integer academicPeriod,
         LocalTime preferredStudyTime,
-        boolean reviewNotificationsEnabled
+        boolean reviewNotificationsEnabled,
+        int dailyQuestionLimit,
+        boolean defaultDailyQuestionLimit
 ) {
 }

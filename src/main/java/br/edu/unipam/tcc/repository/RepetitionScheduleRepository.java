@@ -20,6 +20,13 @@ import java.util.UUID;
 public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSchedule, Long> {
 
     /**
+     * Questão desativada no banco (por exemplo, as abertas que a V10 tirou de circulação) não entra
+     * na fila, nas contagens nem nos lembretes. Um filtro único em todas as consultas mantém o
+     * cabeçalho "faltam N hoje", o lembrete e a questão apresentada sempre de acordo.
+     */
+    String ACTIVE_FLASHCARD_FILTER = "AND s.flashcard.active = true ";
+
+    /**
      * Restringe revisões e lembretes aos cards de cursos em que o estudante está matriculado.
      * Trocar de curso apenas desativa a matrícula anterior, então o progresso MMEEBB do curso
      * antigo fica guardado e volta a valer se o aluno retornar a ele.
@@ -67,7 +74,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status IN :statuses " +
-           "AND s.flashcard.active = true " +
+           ACTIVE_FLASHCARD_FILTER +
            ACTIVE_ENROLLMENT_FILTER)
     long countPendingReviewsByStudent(
             @Param("studentId") UUID studentId,
@@ -78,7 +85,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
     @Query("SELECT COUNT(s) FROM RepetitionSchedule s " +
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
-           "AND s.flashcard.active = true " +
+           ACTIVE_FLASHCARD_FILTER +
            "AND s.status != 'COMPLETED' " +
            ACTIVE_ENROLLMENT_FILTER)
     long countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(
@@ -92,9 +99,42 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "WHERE s.student.id = :studentId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status = :status " +
+           ACTIVE_FLASHCARD_FILTER +
            ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")
     List<RepetitionSchedule> findPendingReviewsByStudent(
+            @Param("studentId") UUID studentId,
+            @Param("currentDate") LocalDate currentDate,
+            @Param("status") ScheduleStatus status
+    );
+
+    /**
+     * Revisões vencidas: questões que o estudante já respondeu ao menos uma vez. Mesmo recorte da
+     * {@link #findPendingReviewsByStudent}, para o lembrete anunciar exatamente a fila que o aluno
+     * vai receber, sem carregar centenas de agendamentos só para contá-los.
+     */
+    @Query("SELECT COUNT(s) FROM RepetitionSchedule s " +
+           "WHERE s.student.id = :studentId " +
+           "AND s.nextReviewDate <= :currentDate " +
+           "AND s.status = :status " +
+           "AND s.lastReviewedAt IS NOT NULL " +
+           ACTIVE_FLASHCARD_FILTER +
+           ACTIVE_ENROLLMENT_FILTER)
+    long countDueReviewsByStudent(
+            @Param("studentId") UUID studentId,
+            @Param("currentDate") LocalDate currentDate,
+            @Param("status") ScheduleStatus status
+    );
+
+    /** Questões vencidas que o estudante nunca respondeu (as "novas" da fila do dia). */
+    @Query("SELECT COUNT(s) FROM RepetitionSchedule s " +
+           "WHERE s.student.id = :studentId " +
+           "AND s.nextReviewDate <= :currentDate " +
+           "AND s.status = :status " +
+           "AND s.lastReviewedAt IS NULL " +
+           ACTIVE_FLASHCARD_FILTER +
+           ACTIVE_ENROLLMENT_FILTER)
+    long countDueNewQuestionsByStudent(
             @Param("studentId") UUID studentId,
             @Param("currentDate") LocalDate currentDate,
             @Param("status") ScheduleStatus status
@@ -107,6 +147,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "AND sub.id = :subjectId " +
            "AND s.nextReviewDate <= :currentDate " +
            "AND s.status = :status " +
+           ACTIVE_FLASHCARD_FILTER +
            ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")
     List<RepetitionSchedule> findPendingReviewsByStudentAndSubject(
@@ -125,7 +166,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "AND s.flashcard.subject.id = :subjectId " +
            "AND s.flashcard.topic = :topic " +
            "AND s.nextReviewDate <= :currentDate " +
-           "AND s.flashcard.active = true " +
+           ACTIVE_FLASHCARD_FILTER +
            "AND s.status <> 'COMPLETED' " +
            ACTIVE_ENROLLMENT_FILTER)
     long countDueSchedulesByTopic(
@@ -146,7 +187,7 @@ public interface RepetitionScheduleRepository extends JpaRepository<RepetitionSc
            "AND sub.id = :subjectId " +
            "AND f.topic = :topic " +
            "AND s.nextReviewDate > :currentDate " +
-           "AND f.active = true " +
+           ACTIVE_FLASHCARD_FILTER +
            "AND s.status <> 'COMPLETED' " +
            ACTIVE_ENROLLMENT_FILTER +
            "ORDER BY s.nextReviewDate ASC")

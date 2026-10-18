@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.service.impl;
 
+import br.edu.unipam.tcc.config.DailyLimitProperties;
 import br.edu.unipam.tcc.dto.StudentProfileDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.Student;
@@ -31,6 +32,7 @@ public class StudentSettingsServiceImpl implements StudentSettingsService {
     private final StudentCourseRepository studentCourseRepository;
     private final CourseRepository courseRepository;
     private final ScheduleSeedingService scheduleSeedingService;
+    private final DailyLimitProperties dailyLimitProperties;
     private final Clock clock;
 
     @Override
@@ -50,7 +52,9 @@ public class StudentSettingsServiceImpl implements StudentSettingsService {
                 enrollment.map(link -> link.getCourse().getName()).orElse(null),
                 enrollment.map(StudentCourse::getAcademicPeriod).orElse(null),
                 student.getPreferredStudyTime(),
-                Boolean.TRUE.equals(student.getReviewNotificationsEnabled())
+                Boolean.TRUE.equals(student.getReviewNotificationsEnabled()),
+                dailyLimitProperties.resolve(student.getDailyQuestionLimit()),
+                student.getDailyQuestionLimit() == null
         );
     }
 
@@ -83,6 +87,24 @@ public class StudentSettingsServiceImpl implements StudentSettingsService {
         }
         studentRepository.save(student);
         return enabled;
+    }
+
+    /**
+     * Vale a partir de já: a fila do dia é recalculada a cada questão, então um limite menor do que
+     * o já respondido hoje simplesmente encerra a meta do dia, sem desfazer nada.
+     */
+    @Override
+    @Transactional
+    public int updateDailyQuestionLimit(UUID studentId, Integer dailyQuestionLimit) {
+        if (dailyQuestionLimit != null && !dailyLimitProperties.accepts(dailyQuestionLimit)) {
+            throw new IllegalArgumentException(String.format(
+                    "Limite diário %d fora da faixa aceita (%d a %d).",
+                    dailyQuestionLimit, dailyLimitProperties.getMin(), dailyLimitProperties.getMax()));
+        }
+        Student student = loadStudent(studentId);
+        student.setDailyQuestionLimit(dailyQuestionLimit);
+        studentRepository.save(student);
+        return dailyLimitProperties.resolve(dailyQuestionLimit);
     }
 
     @Override

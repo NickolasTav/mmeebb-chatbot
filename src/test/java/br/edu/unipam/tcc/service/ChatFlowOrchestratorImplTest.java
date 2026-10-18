@@ -1,7 +1,9 @@
 package br.edu.unipam.tcc.service;
 
+import br.edu.unipam.tcc.config.DailyLimitProperties;
 import br.edu.unipam.tcc.dto.AdaptiveReviewOutcomeDto;
 import br.edu.unipam.tcc.dto.AnswerEvaluationDto;
+import br.edu.unipam.tcc.dto.DailyReviewPlanDto;
 import br.edu.unipam.tcc.dto.IntentResultDto;
 import br.edu.unipam.tcc.dto.TutorContextDto;
 import br.edu.unipam.tcc.dto.TopicPerformanceDto;
@@ -22,12 +24,14 @@ import br.edu.unipam.tcc.flow.StudentSettingsFlowHandler;
 import br.edu.unipam.tcc.repository.CourseRepository;
 import br.edu.unipam.tcc.repository.FlashcardRepository;
 import br.edu.unipam.tcc.repository.RepetitionScheduleRepository;
+import br.edu.unipam.tcc.repository.ReviewAttemptRepository;
 import br.edu.unipam.tcc.repository.StudentCourseRepository;
 import br.edu.unipam.tcc.repository.StudentRepository;
 import br.edu.unipam.tcc.messaging.OutgoingMessagePublisher;
 import br.edu.unipam.tcc.observability.MmeebbMetrics;
 import br.edu.unipam.tcc.repository.SubjectRepository;
 import br.edu.unipam.tcc.service.impl.ChatFlowOrchestratorImpl;
+import br.edu.unipam.tcc.service.impl.DailyReviewQueueServiceImpl;
 import br.edu.unipam.tcc.session.ChatSessionState;
 import br.edu.unipam.tcc.session.ChatSessionStore;
 import br.edu.unipam.tcc.util.OptionShuffler;
@@ -83,6 +87,8 @@ class ChatFlowOrchestratorImplTest {
     @Mock private FlashcardRepository flashcardRepository;
     @Mock private RepetitionScheduleRepository repetitionScheduleRepository;
     @Mock private AdaptiveReviewService adaptiveReviewService;
+    @Mock private DailyReviewQueueService dailyReviewQueueService;
+    @Mock private ReviewAttemptRepository reviewAttemptRepository;
     @Mock private AiTutorService aiTutorService;
     @Mock private IntentRouterService intentRouterService;
     @Mock private AnswerEvaluationService answerEvaluationService;
@@ -102,6 +108,7 @@ class ChatFlowOrchestratorImplTest {
     private Course course;
     private Subject subject;
     private Flashcard flashcard;
+    private DailyReviewQueueServiceImpl dailyQueue;
 
     @BeforeEach
     void setUp() {
@@ -130,6 +137,15 @@ class ChatFlowOrchestratorImplTest {
         // Sem estímulo adaptativo, a fila chega ao aluno na mesma ordem em que veio do banco.
         when(adaptiveReviewService.prioritize(any(), anyList()))
                 .thenAnswer(invocation -> invocation.getArgument(1));
+
+        // Limite diário real sobre os repositórios mockados: os testes de conversa continuam
+        // descrevendo a fila pelo banco (stubPending) e exercitam o corte de verdade.
+        dailyQueue = new DailyReviewQueueServiceImpl(repetitionScheduleRepository, reviewAttemptRepository,
+                adaptiveReviewService, new DailyLimitProperties(20, 5, 100, 0.25), clock);
+        when(dailyReviewQueueService.planToday(any()))
+                .thenAnswer(invocation -> dailyQueue.planToday(invocation.getArgument(0)));
+        when(dailyReviewQueueService.summarizeToday(any()))
+                .thenAnswer(invocation -> dailyQueue.summarizeToday(invocation.getArgument(0)));
     }
 
     private UazapiWebhookDto message(String text) {
@@ -241,9 +257,9 @@ class ChatFlowOrchestratorImplTest {
         when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
         when(studentOnboardingService.register(PHONE, "Maria Silva", "12345", course.getId(), 8))
                 .thenReturn(student);
-        when(repetitionScheduleRepository
-                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(eq(student.getId()), any()))
-                .thenReturn(12L);
+        when(repetitionScheduleRepository.countDueNewQuestionsByStudent(
+                eq(student.getId()), any(), eq(ScheduleStatus.PENDING)))
+                .thenReturn(381L);
 
         orchestrator.processIncomingMessage(message("8"));
 
@@ -253,7 +269,9 @@ class ChatFlowOrchestratorImplTest {
 
         String sent = lastSentMessage();
         assertTrue(sent.contains("Cadastro concluído, Maria"));
-        assertTrue(sent.contains("12"));
+        // O total do banco e o teto diário, não "Preparei 381 questões" para responder hoje.
+        assertTrue(sent.contains("Seu banco tem *381* questão(ões). Vou te enviar até *20* por dia"), sent);
+        assertFalse(sent.contains("Preparei"), sent);
         assertTrue(sent.contains("*08:00*"));
         assertTrue(sent.contains("*configurações*"));
     }
@@ -703,7 +721,7 @@ class ChatFlowOrchestratorImplTest {
         orchestrator.processIncomingMessage(message("1"));
 
         String sent = lastSentMessage();
-        assertTrue(sent.startsWith("📚 *Revisão MMEEBB* · faltam *2* hoje\n🏷️ _Cardiologia - Arritmias_\n\n"
+        assertTrue(sent.startsWith("📚 *Revisão MMEEBB* · faltam *2* hoje (2 novas)\n🏷️ _Cardiologia - Arritmias_\n\n"
                 + "❓ Qual a primeira conduta na FA com instabilidade hemodinâmica?\n\n*A)* "), sent);
         assertTrue(sent.endsWith("\n\n✍️ _Responda com a letra (ex.: *B*)._\n_Dúvida? Pergunte — não conta como erro._"), sent);
         for (String letter : List.of("A", "B", "C", "D")) {
@@ -1115,5 +1133,172 @@ class ChatFlowOrchestratorImplTest {
 
         verify(repetitionScheduleRepository).findPendingReviewsByStudent(
                 student.getId(), LocalDate.of(2026, 9, 17), ScheduleStatus.PENDING);
+    }
+
+    // =========================================================================
+    // Limite diário de questões
+    // =========================================================================
+
+    private RepetitionSchedule reviewedScheduleOf(Flashcard card, long id) {
+        RepetitionSchedule schedule = scheduleOf(card, id, null);
+        schedule.setLastReviewedAt(java.time.LocalDateTime.of(2026, 9, 10, 9, 0));
+        return schedule;
+    }
+
+    private RepetitionSchedule[] newSchedules(int count, long firstId) {
+        RepetitionSchedule[] schedules = new RepetitionSchedule[count];
+        for (int i = 0; i < count; i++) {
+            schedules[i] = scheduleOf(multipleChoice(firstId + i), firstId + i, null);
+        }
+        return schedules;
+    }
+
+    private void stubAnsweredToday(long answered) {
+        when(reviewAttemptRepository.countAnsweredBetween(eq(student.getId()), any(), any())).thenReturn(answered);
+    }
+
+    @Test
+    @DisplayName("Cabeçalho da revisão deve detalhar quantas são revisões e quantas são novas")
+    void headerShouldBreakDownReviewsAndNewQuestions() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        stubPending(scheduleOf(multipleChoice(400L), 40L, null),
+                reviewedScheduleOf(multipleChoice(401L), 41L),
+                reviewedScheduleOf(multipleChoice(402L), 42L));
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("📚 *Revisão MMEEBB* · faltam *3* hoje (2 revisões + 1 nova)\n"), sent);
+        // A revisão vencida vem antes da nova, mesmo estando depois dela na ordem do banco.
+        assertEquals(401L, session.getCurrentFlashcardId());
+    }
+
+    @Test
+    @DisplayName("Primeiro dia com 381 questões deve mostrar só o limite padrão de 20, não 'faltam 381 hoje'")
+    void firstDayShouldBeCappedAtDefaultLimit() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        stubPending(newSchedules(381, 1000L));
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("📚 *Revisão MMEEBB* · faltam *20* hoje (20 novas)\n"), sent);
+        assertEquals(ChatState.REVIEW_MODE, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Com a meta do dia cumprida, 'revisar' deve avisar quantas seguem na fila e voltar ao menu")
+    void reviewRequestAfterGoalShouldReportGoalReached() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        stubAnsweredToday(20);
+        stubPending(newSchedules(361, 1000L));
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("🎯 *Meta de hoje concluída!* Você respondeu *20* questão(ões) hoje."), sent);
+        assertTrue(sent.contains("Ainda há *361* na fila: elas chegam nos próximos dias, até *20* por dia."), sent);
+        assertFalse(sent.contains("Revisão MMEEBB"), sent);
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        verify(repetitionScheduleRepository, never()).updateLastCorrectPosition(any(), any());
+    }
+
+    @Test
+    @DisplayName("Ao responder a última questão do limite, deve fechar com a meta concluída em vez da próxima questão")
+    void lastAnswerWithinLimitShouldCloseWithGoalReached() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.accepted());
+        stubAnswerOutcome(card, true, 1, 2, false);
+        // Esta resposta já gravou a 20ª tentativa do dia; ainda há 5 vencidas fora do limite.
+        stubAnsweredToday(20);
+        stubPending(newSchedules(5, 2000L));
+
+        orchestrator.processIncomingMessage(message("b"));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.startsWith("✅ *Correto!*"), sent);
+        assertTrue(sent.contains("🎯 *Meta de hoje concluída!*"), sent);
+        assertTrue(sent.contains("Ainda há *5* na fila"), sent);
+        assertFalse(sent.contains("📚 *Revisão MMEEBB*"), sent);
+        assertEquals(ChatState.MAIN_MENU, session.getCurrentState());
+        assertNull(session.getCurrentFlashcardId());
+    }
+
+    @Test
+    @DisplayName("Questões respondidas hoje devem descontar do limite no contador da próxima questão")
+    void answeredTodayShouldShrinkTheCounter() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.accepted());
+        stubAnswerOutcome(card, true, 1, 2, false);
+        stubAnsweredToday(12);
+        stubPending(newSchedules(30, 3000L));
+
+        orchestrator.processIncomingMessage(message("b"));
+
+        assertTrue(lastSentMessage().contains("📚 *Revisão MMEEBB* · faltam *8* hoje (8 novas)"));
+        assertEquals(ChatState.REVIEW_MODE, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Dúvida durante a revisão não deve gerar tentativa nem descontar do limite do dia")
+    void doubtShouldNotConsumeDailyLimit() {
+        Flashcard card = multipleChoice(300L);
+        ChatSessionState session = reviewingShownOrder(card);
+        when(flashcardRepository.findSubjectIdById(card.getId())).thenReturn(Optional.of(subject.getId()));
+        when(answerEvaluationService.evaluate(anyString(), any(Flashcard.class))).thenReturn(AnswerEvaluationDto.doubt());
+        when(aiTutorService.answer(any(TutorContextDto.class), anyString())).thenReturn("Pense na instabilidade.");
+        stubAnsweredToday(19);
+        stubPending(scheduleOf(card, 30L, 1), scheduleOf(multipleChoice(301L), 31L, null));
+
+        orchestrator.processIncomingMessage(message("é a C?"));
+
+        verify(adaptiveReviewService, never()).processAnswer(any(), any(), anyBoolean(), any());
+        // 19 respondidas de 20: a questão em dúvida continua sendo a única do dia.
+        assertTrue(lastSentMessage().contains("faltam *1* hoje (1 nova)"), lastSentMessage());
+        assertEquals(ChatState.REVIEW_MODE, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Limite personalizado do estudante deve valer no lugar do padrão")
+    void customLimitShouldOverrideDefault() {
+        student.setDailyQuestionLimit(5);
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        stubPending(newSchedules(40, 4000L));
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        assertTrue(lastSentMessage().startsWith("📚 *Revisão MMEEBB* · faltam *5* hoje (5 novas)\n"));
+    }
+
+    @Test
+    @DisplayName("Mesmo com revisões sobrando, o dia deve reservar vagas para questões novas")
+    void headerShouldShowReservedNewQuestions() {
+        ChatSessionState session = registeredSession(ChatState.MAIN_MENU);
+        when(chatSessionStore.find(PHONE)).thenReturn(Optional.of(session));
+        when(studentRepository.findById(student.getId())).thenReturn(Optional.of(student));
+        RepetitionSchedule[] reviews = new RepetitionSchedule[25];
+        for (int i = 0; i < reviews.length; i++) {
+            reviews[i] = reviewedScheduleOf(multipleChoice(5000L + i), 5000L + i);
+        }
+        RepetitionSchedule[] news = newSchedules(10, 6000L);
+        RepetitionSchedule[] all = new RepetitionSchedule[35];
+        System.arraycopy(reviews, 0, all, 0, 25);
+        System.arraycopy(news, 0, all, 25, 10);
+        stubPending(all);
+
+        orchestrator.processIncomingMessage(message("1"));
+
+        assertTrue(lastSentMessage().startsWith("📚 *Revisão MMEEBB* · faltam *20* hoje (15 revisões + 5 novas)\n"),
+                lastSentMessage());
     }
 }

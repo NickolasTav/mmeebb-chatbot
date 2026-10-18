@@ -23,6 +23,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -276,5 +277,60 @@ class RepetitionScheduleRepositoryTest {
                 .subject(subject).topic(topic).question("Pergunta " + topic).answer("Resposta").build());
         return repetitionScheduleRepository.save(RepetitionSchedule.builder()
                 .student(student).flashcard(card).nextReviewDate(nextReviewDate).build());
+    }
+
+    // =========================================================================
+    // Limite diário: questão inativa fora da fila e contagem revisões x novas
+    // =========================================================================
+
+    @Test
+    @DisplayName("Questão desativada não deve aparecer em nenhuma consulta de pendência")
+    void questaoInativaNaoEntraEmNenhumaConsulta() {
+        enroll(medicina, true);
+        Subject cardiologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_CARDIO_INATIVA").name("Cardiologia IT").build());
+        RepetitionSchedule inativa = scheduleFor(cardiologia, "Arritmias", TODAY);
+        inativa.getFlashcard().setActive(false);
+        flashcardRepository.save(inativa.getFlashcard());
+        entityManager.flush();
+        entityManager.clear();
+
+        // Só o card ativo do setUp (curso de Medicina) continua na fila.
+        assertThat(pendingCourseCodes()).containsExactly("IT_MED");
+        assertThat(repetitionScheduleRepository.findPendingReviewsByStudentAndSubject(
+                student.getId(), cardiologia.getId(), TODAY, ScheduleStatus.PENDING)).isEmpty();
+        assertThat(repetitionScheduleRepository
+                .countByStudentIdAndNextReviewDateLessThanEqualAndIsActiveTrue(student.getId(), TODAY)).isEqualTo(1);
+        assertThat(repetitionScheduleRepository
+                .countDueNewQuestionsByStudent(student.getId(), TODAY, ScheduleStatus.PENDING)).isEqualTo(1);
+        assertThat(repetitionScheduleRepository
+                .countDueSchedulesByTopic(student.getId(), cardiologia.getId(), "Arritmias", TODAY)).isZero();
+    }
+
+    @Test
+    @DisplayName("Deve separar revisões (já respondidas) de novas, no mesmo recorte da fila")
+    void deveContarRevisoesENovasSeparadamente() {
+        enroll(medicina, true);
+        enroll(sistemas, false);
+        Subject cardiologia = subjectRepository.save(Subject.builder()
+                .course(medicina).code("IT_CARDIO_CONTA").name("Cardiologia IT").build());
+        for (int i = 0; i < 3; i++) {
+            RepetitionSchedule revisao = scheduleFor(cardiologia, "Revisão " + i, TODAY.minusDays(i));
+            revisao.setLastReviewedAt(LocalDateTime.of(2026, 9, 1, 8, 0));
+            repetitionScheduleRepository.save(revisao);
+        }
+        scheduleFor(cardiologia, "Nova vencida", TODAY);
+        RepetitionSchedule futura = scheduleFor(cardiologia, "Revisão futura", TODAY.plusDays(3));
+        futura.setLastReviewedAt(LocalDateTime.of(2026, 9, 1, 8, 0));
+        repetitionScheduleRepository.save(futura);
+        entityManager.flush();
+
+        // Novas: a do setUp em Medicina + "Nova vencida". O card de Sistemas está fora (matrícula inativa).
+        assertThat(repetitionScheduleRepository
+                .countDueReviewsByStudent(student.getId(), TODAY, ScheduleStatus.PENDING)).isEqualTo(3);
+        assertThat(repetitionScheduleRepository
+                .countDueNewQuestionsByStudent(student.getId(), TODAY, ScheduleStatus.PENDING)).isEqualTo(2);
+        assertThat(repetitionScheduleRepository
+                .findPendingReviewsByStudent(student.getId(), TODAY, ScheduleStatus.PENDING)).hasSize(5);
     }
 }

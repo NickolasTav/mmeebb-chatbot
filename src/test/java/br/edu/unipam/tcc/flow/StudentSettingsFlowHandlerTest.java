@@ -1,5 +1,6 @@
 package br.edu.unipam.tcc.flow;
 
+import br.edu.unipam.tcc.config.DailyLimitProperties;
 import br.edu.unipam.tcc.dto.StudentProfileDto;
 import br.edu.unipam.tcc.entity.Course;
 import br.edu.unipam.tcc.entity.enums.ChatState;
@@ -18,6 +19,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -51,6 +53,7 @@ class StudentSettingsFlowHandlerTest {
     @Mock private OutgoingMessagePublisher outgoingMessagePublisher;
     @Mock private StudentSettingsService studentSettingsService;
     @Mock private CourseRepository courseRepository;
+    @Spy private DailyLimitProperties dailyLimitProperties = new DailyLimitProperties(20, 5, 100, 0.25);
 
     @InjectMocks private StudentSettingsFlowHandler handler;
 
@@ -74,7 +77,7 @@ class StudentSettingsFlowHandlerTest {
                 "Maria Silva Andrade",
                 preferredName,
                 preferredName != null ? preferredName : "Maria",
-                ra, courseId, courseName, period, LocalTime.of(12, 15), enabled));
+                ra, courseId, courseName, period, LocalTime.of(12, 15), enabled, 20, true));
     }
 
     private ChatSessionState session(ChatState state) {
@@ -400,5 +403,98 @@ class StudentSettingsFlowHandlerTest {
         assertEquals(ChatState.SETTINGS_MENU, session.getCurrentState());
         assertTrue(lastSentMessage().contains("Não há cursos disponíveis"));
         verify(outgoingMessagePublisher, atLeastOnce()).publish(eq(PHONE), anyString());
+    }
+
+    // ============================================================ questões por dia
+
+    @Test
+    @DisplayName("Menu deve mostrar o limite diário atual e a opção para alterá-lo")
+    void menuDeveMostrarLimiteDiario() {
+        handler.open(session(ChatState.MAIN_MENU));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("📊 *Questões por dia:* 20 (padrão)"), sent);
+        assertTrue(sent.contains("*5* - 📊 Questões por dia"), sent);
+    }
+
+    @Test
+    @DisplayName("Opção 5 deve pedir o novo limite informando a faixa aceita e o valor atual")
+    void opcaoCincoDevePedirNovoLimite() {
+        ChatSessionState session = session(ChatState.SETTINGS_MENU);
+
+        handler.handle(session, "5");
+
+        assertEquals(ChatState.SETTINGS_AWAITING_DAILY_LIMIT, session.getCurrentState());
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("Hoje: *20 (padrão)*"), sent);
+        assertTrue(sent.contains("entre *5* e *100*"), sent);
+        assertTrue(sent.contains("*padrão*"), sent);
+    }
+
+    @Test
+    @DisplayName("Deve salvar o novo limite, confirmar o valor e voltar ao menu")
+    void deveSalvarNovoLimiteEConfirmar() {
+        ChatSessionState session = session(ChatState.SETTINGS_AWAITING_DAILY_LIMIT);
+        when(studentSettingsService.updateDailyQuestionLimit(STUDENT_ID, 30)).thenReturn(30);
+
+        handler.handle(session, " 30 ");
+
+        verify(studentSettingsService).updateDailyQuestionLimit(STUDENT_ID, 30);
+        assertEquals(ChatState.SETTINGS_MENU, session.getCurrentState());
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("✅ Pronto! A partir de agora você recebe até *30* questões por dia."), sent);
+        assertTrue(sent.contains("Configurações"), sent);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"4", "101", "0", "-10", "vinte", "20 questões", ""})
+    @DisplayName("Deve recusar limite fora da faixa ou não numérico, sem gravar e sem sair do passo")
+    void deveRecusarLimiteInvalido(String input) {
+        ChatSessionState session = session(ChatState.SETTINGS_AWAITING_DAILY_LIMIT);
+
+        handler.handle(session, input);
+
+        verify(studentSettingsService, never()).updateDailyQuestionLimit(any(), any());
+        assertEquals(ChatState.SETTINGS_AWAITING_DAILY_LIMIT, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("⚠️ Envie apenas um número entre *5* e *100*."));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"padrão", "PADRAO", "Padrão"})
+    @DisplayName("'padrão' deve voltar ao limite global")
+    void padraoDeveVoltarAoLimiteGlobal(String input) {
+        ChatSessionState session = session(ChatState.SETTINGS_AWAITING_DAILY_LIMIT);
+        when(studentSettingsService.updateDailyQuestionLimit(STUDENT_ID, null)).thenReturn(20);
+
+        handler.handle(session, input);
+
+        verify(studentSettingsService).updateDailyQuestionLimit(STUDENT_ID, null);
+        assertEquals(ChatState.SETTINGS_MENU, session.getCurrentState());
+        assertTrue(lastSentMessage().contains("Voltei ao padrão de *20* questões por dia."));
+    }
+
+    @Test
+    @DisplayName("'voltar' no passo do limite deve cancelar sem alterar nada")
+    void voltarDeveCancelarAlteracaoDoLimite() {
+        ChatSessionState session = session(ChatState.SETTINGS_AWAITING_DAILY_LIMIT);
+
+        handler.handle(session, "voltar");
+
+        verify(studentSettingsService, never()).updateDailyQuestionLimit(any(), any());
+        assertEquals(ChatState.SETTINGS_MENU, session.getCurrentState());
+    }
+
+    @Test
+    @DisplayName("Menu deve mostrar o limite escolhido pelo aluno sem a marca de padrão")
+    void menuDeveMostrarLimitePersonalizado() {
+        when(studentSettingsService.getProfile(STUDENT_ID)).thenReturn(new StudentProfileDto(
+                "Maria Silva Andrade", null, "Maria", null, null, null, null,
+                LocalTime.of(12, 15), true, 35, false));
+
+        handler.open(session(ChatState.MAIN_MENU));
+
+        String sent = lastSentMessage();
+        assertTrue(sent.contains("📊 *Questões por dia:* 35\n"), sent);
+        assertFalse(sent.contains("35 (padrão)"), sent);
     }
 }
